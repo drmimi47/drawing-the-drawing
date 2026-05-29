@@ -1,0 +1,52 @@
+.toolbar-dock {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(8px);
+}
+
+.tool-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+
+.tool-button:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.tool-button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.tool-button.is-active {
+  background: var(--ink);
+  color: #fff;
+}
+
+.tool-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

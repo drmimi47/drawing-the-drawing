@@ -1,0 +1,293 @@
+BLINDSPOT — IMPLEMENTATION PLAN
+================================================================================
+A second-order cybernetics sketching tool where geometry persists only while
+observed. Optimized for step-by-step development using generative code agents.
+
+
+TECH STACK
+----------
+- TypeScript        — strict typing across geometry graph, mutation engine, API contracts
+- React             — UI shell: floating toolbars, mode selector, lock controls, evolution panel
+- Zustand           — centralized high-performance state for canvas, tool, and mutation modes
+- React Three Fiber — WebGL canvas scene via Three.js; stroke rendering, pin glow, history layers
+- WebGL (via R3F)   — custom shaders for metaball influence fields and opacity-layered history
+- Vite              — fast HMR dev server, native ESM build
+- GitHub            — version control, PR-based workflow
+- Vercel            — deployment with Edge Function support for downstream API integrations
+
+NOTE: R3F is the WebGL layer — no raw WebGL boilerplate needed separately.
+
+
+DESIGN SYSTEM & UX
+------------------
+CANVAS
+  - Infinite, minimalist light-gray background (#F9F9F9)
+  - Subtle dot-grid that scales smoothly with zoom level (disappears when zoomed far out)
+  - Full 100vw / 100vh app wrapper; no scrollbars
+
+TOOLBARS
+  - Floating bottom-center dock: tool selector (Draw / Pan / Lock)
+  - Floating top-left: mutation mode selector (Normalization / Rationalism / Hallucination)
+  - Clean icons, active-state highlight, smooth hover transitions
+  - No heavy chrome — the drawing surface dominates
+
+CURSORS (adaptive, hardware-level swapping)
+  - Draw mode:   precision crosshair or pencil icon
+  - Pan mode:    open hand (grab) → closed hand (grabbing) during active drag
+  - Lock mode:   target/pin icon
+  - Mutations in progress: no cursor override — tool cursor persists
+
+INTERACTIONS
+  - Keyboard hotkeys for frictionless tool switching (see Cluster J)
+  - Spring-loaded feel: tool switches are instant, no modal dialogs
+
+
+PROJECT STRUCTURE
+-----------------
+src/
+  components/
+    Canvas/           R3F scene, OrthographicCamera, stroke + graph rendering
+    Toolbar/          Tool dock, mutation mode buttons, evolution reveal toggle
+    LockPin/          Pin mesh + influence glow inside the Canvas scene
+    EvolutionPanel/   History reveal overlay controls
+  hooks/
+    useDrawing.ts     Pointer event → raw point stream → polyline
+    useViewport.ts    Camera pan/zoom state; AABB computed on every frame change
+    useMutation.ts    Consumes mutation queue; dispatches to active mode algorithm
+    useHistory.ts     Snapshot push and ordered state retrieval for reveal
+    useLocks.ts       Pin list → per-vertex influence scalar
+  geometry/
+    graph.ts          Vertex/Edge graph; addStroke(); intersection detection
+    simplify.ts       Ramer-Douglas-Peucker implementation
+    mutations/
+      normalize.ts    Angular snapping + force relaxation — IMPLEMENTED
+      rationalize.ts  Global grid field resolution — STUB, deferred
+      hallucinate.ts  Anthropic API geometry completion — STUB, deferred
+  shaders/
+    influence.frag    Smooth metaball radial falloff for lock pin glow
+    history.vert      Per-layer opacity uniform for evolution reveal
+  store/
+    drawingStore.ts   Zustand: graph, pins, tool mode, mutation mode, history, reveal flag
+  utils/
+    viewport.ts       AABB math, edge-vs-viewport intersection tests
+    noise.ts          Perlin noise (used by Rationalism when implemented)
+  types/
+    geometry.ts       Vertex, Edge, Stroke, Snapshot, Pin type definitions
+  api/
+    hallucinate.ts    Vercel Edge Function — Anthropic API proxy — STUB, deferred
+
+
+CORE DATA MODEL
+---------------
+Vertex   { id, x, y, createdAt, lastSeenTimestamp, lockInfluence }
+Edge     { id, v1Id, v2Id, strokeId, enteredViewportAt, exitedViewportAt }
+Pin      { id, x, y, radius }
+Snapshot { timestamp, vertices: Vertex[], edges: Edge[] }
+
+Graph is a planar graph. Strokes are simplified on completion (RDP), then
+intersection-tested against existing edges to insert shared vertices at crossings.
+
+Tool state enum:  'DRAW' | 'PAN' | 'LOCK'
+Mutation mode enum:  'NORMALIZATION' | 'RATIONALISM' | 'HALLUCINATION'
+
+
+MUTATION RULES (implementation detail)
+---------------------------------------
+VIEWPORT OBSERVER
+  - Orthographic camera bounds = viewport AABB, recalculated on every pan/zoom event
+  - On pan-end or zoom-end: diff currently visible edges vs. previous frame
+  - Edges crossing OUT: record exitedViewportAt = Date.now()
+  - Edges crossing IN:  compute timeOutside = now - exitedViewportAt; queue for mutation
+
+TIME DECAY
+  - mutationMagnitude = clamp(timeOutside / DECAY_MAX_MS, 0, 1)
+  - DECAY_MAX_MS = 30 000 ms default (tunable constant)
+  - lockInfluence per vertex (0–1) reduces magnitude: effectiveMag = mag * (1 - lockInfluence)
+
+NORMALIZATION — IMPLEMENTED (local, procedural)
+  - Per re-entering edge: measure angle → snap to nearest 15° increment if within threshold
+  - Detect near-parallel neighbors (within 10°) → apply small attractive force toward shared angle
+  - Force relaxation pass on adjacent vertices to prevent tearing at shared joints
+  - Operates edge-by-edge; no opinion on global composition
+
+RATIONALISM — DEFERRED (global, procedural)
+  - Seed a constraint field from existing geometry; vertices drift toward grid intersections
+  - Short dangling edges extend toward adjacencies; near-closed polygons close fully
+  - Stub only — selecting this mode is a no-op in the current build
+
+HALLUCINATION — DEFERRED (LLM, multi-modal)
+  - Serialize visible graph → JSON segment list → POST to Anthropic API (claude-sonnet-4-6)
+  - Parse returned geometry → diff against current graph → animate new edges in over 1–2s
+  - Vercel Edge Function proxies the call (API key stays server-side)
+  - Stub only — api/hallucinate.ts returns { segments: [] } placeholder
+
+
+LOCKING MECHANISM
+-----------------
+- Pins placed by shift+click when tool is 'LOCK'
+- Influence per vertex: influence_i = clamp(1 - dist(v, pin)² / pin.radius², 0, 1)
+- Multiple pins: totalInfluence = clamp(sum of all influences, 0, 1)
+- Visualized as soft glowing red rings (influence.frag shader, smooth radial falloff)
+- Effective mutation magnitude: effectiveMag = baseMag * (1 - totalInfluence)
+
+
+EVOLUTIONARY LINEAGE
+--------------------
+- On every mutation event: deep-clone current graph → push Snapshot to history array
+- History is invisible during normal session
+- On reveal: render all snapshots as stacked Three.js LineSegments layers
+  - opacity = lerp(0.05, 1.0, index / total)  — oldest = faintest, newest = darkest
+  - All layers render simultaneously (light-table effect, not animation)
+- "Export Artwork" button: capture canvas via Three.js preserveDrawingBuffer → PNG
+
+
+IMPLEMENTATION CLUSTERS
+-----------------------
+Execute clusters sequentially. Each must compile and pass its verification goal
+before moving to the next.
+
+CLUSTER A — Project Scaffold & Canvas Viewport
+  [ ] Initialize Vite + React + TypeScript app (npm create vite)
+  [ ] Install: three, @react-three/fiber, @react-three/drei, zustand, lucide-react
+  [ ] Set up Tailwind CSS or a minimal global CSS reset for layout
+  [ ] Build 100vw / 100vh app wrapper; mount R3F Canvas component
+  [ ] Configure OrthographicCamera for 2D top-down world-space coordinates
+  [ ] Implement persistent infinite dot-grid background: tiled plane scaling with zoom,
+      fading out when zoomed far out, always light and non-distracting
+  [ ] Stub floating bottom-center toolbar overlay (empty, just positioned correctly)
+  [ ] Connect GitHub repo; wire Vercel for preview deploys on every push
+  * Verification Goal: App compiles with zero errors, renders a full-screen light-gray
+    workspace with subtle dot grid, shows an empty floating toolbar, and Vercel
+    preview URL is live.
+
+CLUSTER B — Freehand Drawing Pipeline
+  [ ] Initialize Zustand store with toolMode: 'DRAW' | 'PAN' | 'LOCK' = 'DRAW'
+  [ ] Pointer event capture: pointerdown / pointermove / pointerup → raw point array
+      (only when toolMode === 'DRAW')
+  [ ] Render a live Three.js Line object following the mouse path during drag
+  [ ] On pointer-up: apply Ramer-Douglas-Peucker simplification (geometry/simplify.ts);
+      commit simplified polyline as a completed stroke
+  [ ] Variable line weight from PointerEvent.pressure; fallback to constant if 0
+  [ ] Cursor: crosshair when toolMode === 'DRAW'
+  [ ] Stroke color picker swatch in toolbar (basic, no heavy styling yet)
+  [ ] Undo: Ctrl+Z removes the last completed stroke
+  * Verification Goal: Freehand lines render instantly with no jitter. Pressing Undo
+    cleanly removes the last stroke. Pressure produces thicker lines on a tablet.
+
+CLUSTER C — Infinite Canvas Navigation
+  [ ] Pan: spacebar + left-drag OR middle-mouse drag translates OrthographicCamera
+  [ ] Zoom: scroll wheel zooms toward cursor world-space position (no cursor drift)
+  [ ] useViewport hook: computes and exposes viewport AABB on every camera change
+  [ ] Cursor: open hand for PAN mode, closed hand during active drag
+  [ ] Tool switching: spacebar held = temporary PAN override; released = back to DRAW
+  [ ] No jitter or drift artifacts during simultaneous pan + zoom
+  * Verification Goal: Panning and zooming feel identical in responsiveness to Miro
+    or Figma. Holding space temporarily switches to pan without disrupting draw mode.
+
+CLUSTER D — Geometry Graph Compilation & Intersection Engine
+  [ ] Define types: Vertex, Edge, Stroke in types/geometry.ts
+  [ ] On stroke completion: insert simplified polyline vertices + edges into graph store
+  [ ] Intersection engine: test new stroke against all existing edges; where crossings
+      are found, split both segments and insert a shared structural Vertex
+  [ ] Replace raw Line rendering with graph-based Three.js LineSegments (from graph state)
+  [ ] graph.ts API: addStroke(), getEdges(), getVertices()
+  * Verification Goal: Crossing two drawn strokes splits them at the intersection,
+    creating a shared node visible in the graph data structure. Rendering is
+    indistinguishable from the previous Line-based approach.
+
+CLUSTER E — Continuous Viewport Edge Observer
+  [ ] On pan-end, zoom-end, and stroke completion: run edge-vs-AABB test for all edges
+  [ ] Edges exiting viewport: stamp exitedViewportAt = Date.now() on the edge record
+  [ ] Edges re-entering viewport: compute timeOutside, clear exit stamp, push to
+      pending mutation queue
+  [ ] Debug toggle (dev only): highlight out-of-bounds edges in muted red/transparent
+  * Verification Goal: Panning lines off-screen and back on-screen correctly tracks
+    how long each edge was hidden. Debug mode visually confirms out-of-viewport edges.
+
+CLUSTER F — Normalization Mode (full implementation)
+  [ ] useMutation hook: consumes pending mutation queue from viewport observer
+  [ ] mutationMagnitude = clamp(timeOutside / DECAY_MAX_MS, 0, 1); DECAY_MAX_MS = 30000
+  [ ] effectiveMag = mutationMagnitude * (1 - vertex.lockInfluence)  [lockInfluence = 0 for now]
+  [ ] normalize.ts: per re-entering edge, detect near-parallel neighbors (threshold 10°),
+      snap to nearest 15° increment, apply force relaxation pass on adjacent vertices
+  [ ] Lerp mutated vertices to new positions over ~500ms
+  [ ] Normalization is the default active mutation mode
+  [ ] Tune DECAY_MAX_MS and snap threshold until behavior matches the concept doc
+  * Verification Goal: Drawing rough boxes, panning them off-screen for ~15 seconds,
+    then panning back shows lines self-aligning toward angular coherence. The effect
+    scales with time out of view.
+
+CLUSTER G — Mutation Mode State Machine (skeleton)
+  [ ] Expand store: mutationMode: 'NORMALIZATION' | 'RATIONALISM' | 'HALLUCINATION'
+  [ ] Add mutation mode toggle panel to the top-left floating toolbar
+  [ ] Rationalism stub: mode switch is a no-op on mutation trigger; console.log intent
+  [ ] rationalize.ts: exported stub function with TODO comment and documented placeholder
+  [ ] api/hallucinate.ts: Vercel Edge Function returning { segments: [] }
+  [ ] hallucinate.ts client: serializes graph to JSON but returns early without API call
+  * Verification Goal: Switching between all three modes updates the store without
+    errors. Normalization still runs correctly. Rationalism and Hallucination are
+    silent no-ops.
+
+CLUSTER H — Lock Pins & Radial Influence Fields
+  [ ] Shift+click on canvas (when toolMode === 'LOCK'): place Pin at world-space coords
+  [ ] Click existing pin: remove it
+  [ ] useLocks hook: per-vertex lockInfluence using influence_i = clamp(1 - d²/r², 0, 1);
+      multiple pins: totalInfluence = clamp(sum, 0, 1)
+  [ ] Wire totalInfluence into effectiveMag in Cluster F's mutation path
+  [ ] Render pins as soft glowing red rings using influence.frag shader (radial falloff)
+  [ ] Overlapping pin zones merge fields smoothly, no hard edges
+  [ ] Cursor: target/pin icon when toolMode === 'LOCK'
+  * Verification Goal: Pinned geometry retains its exact shape when moved off-screen.
+    Unpinned adjacent geometry still mutates normally. Glow rings are visible and
+    communicate the protected zone clearly.
+
+CLUSTER I — Evolutionary Lineage Light-Table Reveal
+  [ ] useHistory hook: on each mutation animation completion, deep-clone graph →
+      push Snapshot to history array (cap at 200; drop oldest when exceeded)
+  [ ] "Reveal Evolution" toggle button in toolbar
+  [ ] When revealed: render all snapshots as stacked LineSegments layers simultaneously
+      with opacity = lerp(0.05, 1.0, index / total)  — oldest lightest, newest darkest
+  [ ] Active drawing layer renders at full opacity on top of all history layers
+  [ ] "Export Artwork" button: Three.js preserveDrawingBuffer canvas → PNG download
+  * Verification Goal: Toggling reveal shows a complex layered ghost map of the
+    drawing's full mutation history. The composite reads like stacked trace paper.
+    Export produces a clean high-resolution PNG of the composite.
+
+CLUSTER J — Final Integration, Hotkeys & Production Rollout
+  [ ] Keyboard shortcuts: D = Draw, V = Pan/View, L = Lock Pin, E = Evolution reveal
+  [ ] Confirm Ctrl+Z undo still works end-to-end through the full graph pipeline
+  [ ] Tablet/stylus test: PointerEvent.pressure curves feel natural with Wacom input
+  [ ] Performance guard: if graph exceeds ~5000 edges, merge into batched instanced
+      buffer rendering
+  [ ] Vercel production deploy from GitHub main branch
+  [ ] Full smoke test: draw → pan away → observe normalization → lock a region →
+      verify locked area does not mutate → reveal evolution → export PNG → confirm
+      60 FPS throughout
+  * Verification Goal: The prototype runs at 60 FPS, accepts all hotkeys, and
+    executes the complete concept cycle cleanly. Public Vercel URL is live.
+
+
+KEY DEPENDENCIES
+----------------
+three                  Three.js (peer dep for R3F)
+@react-three/fiber     R3F core
+@react-three/drei      OrthographicCamera, Line, Html, and helper components
+zustand                Lightweight centralized state
+lucide-react           Icon set for toolbar UI
+@anthropic-ai/sdk      Hallucination mode — install when Cluster G stubs become full impl.
+                       API key must stay server-side via Vercel Edge Function
+
+
+OPEN QUESTIONS / DECISIONS TO REVISIT
+--------------------------------------
+- Intersection detection: brute-force O(n²) is fine for sketch scale; upgrade to
+  Bentley-Ottmann sweep-line if performance degrades on large drawings
+- Dot-grid implementation: shader-based (most performant) vs. instanced mesh tiles —
+  decide during Cluster A based on zoom-scaling behavior
+- Wacom full SDK (pressure curves, tilt): requires browser plugin; treat as an
+  enhancement over the standard PointerEvent.pressure path already in Cluster B
+- DECAY_MAX_MS = 30 000 ms is a starting value; tune during Cluster F
+- History memory cap of 200 snapshots: revisit if export fidelity requires more states
+- Rationalism grid spacing: infer from stroke density vs. fixed user-defined grid —
+  decide when implementing that mode
+================================================================================
