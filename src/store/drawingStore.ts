@@ -1,26 +1,17 @@
 import { create } from 'zustand'
+import type { Graph, RawSample, SamplePoint } from '../types/geometry'
+import { emptyGraph } from '../types/geometry'
+import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
 
 /**
- * Central canvas + tool state (Clusters B–C).
+ * Central canvas + tool state (Cluster D).
  *
- * Stroke/tool types live here for now; Cluster D promotes the geometry types to
- * `types/geometry.ts` when the planar graph lands.
+ * The editable geometry is a planar graph (the source of truth). Strokes are
+ * committed through `commitStroke`, which inserts them into the graph and splits
+ * crossings into shared vertices. Undo snapshots the whole graph.
  */
 
 export type ToolMode = 'DRAW' | 'ERASE' | 'PAN' | 'LOCK'
-
-/** A single point along a committed stroke. `w` is the half-width in world units. */
-export interface StrokePoint {
-  x: number
-  y: number
-  w: number
-}
-
-export interface Stroke {
-  id: string
-  color: string
-  points: StrokePoint[]
-}
 
 const HISTORY_LIMIT = 100
 
@@ -29,52 +20,57 @@ interface DrawingState {
   strokeColor: string
   /** Nominal stroke width in world units (1 world unit = 1px at zoom 1). */
   baseWidth: number
-  strokes: Stroke[]
-  /** Undo history: snapshots of the strokes array before each action. */
-  past: Stroke[][]
+  graph: Graph
+  /** Undo history: graph snapshots taken before each action. */
+  past: Graph[]
 
   setTool: (tool: ToolMode) => void
   setColor: (color: string) => void
   setBaseWidth: (width: number) => void
 
-  /** Push the current strokes onto the undo stack (call at the start of an action). */
+  /** Push the current graph onto the undo stack (call once at the start of an action). */
   beginHistory: () => void
-  /** Replace strokes without touching history (used mid-action, e.g. erasing). */
-  setStrokes: (strokes: Stroke[]) => void
-  /** Commit a finished stroke (records one undo step). */
-  addStroke: (stroke: Stroke) => void
+  /** Replace the graph without touching history (used mid-action, e.g. erasing). */
+  setGraph: (graph: Graph) => void
+  /** Commit a finished freehand stroke (records one undo step). */
+  commitStroke: (points: SamplePoint[], color: string, raw?: RawSample[]) => void
+  /** Erase along the swept capsule (caller manages history for the drag). */
+  eraseCapsule: (ax: number, ay: number, bx: number, by: number, r: number) => boolean
   undo: () => void
   clear: () => void
 }
 
-let strokeCounter = 0
-export const nextStrokeId = (): string => `stroke-${Date.now()}-${strokeCounter++}`
-
-export const useDrawingStore = create<DrawingState>((set) => ({
+export const useDrawingStore = create<DrawingState>((set, get) => ({
   toolMode: 'DRAW',
   strokeColor: '#1a1a1a',
   baseWidth: 3.5,
-  strokes: [],
+  graph: emptyGraph(),
   past: [],
 
   setTool: (tool) => set({ toolMode: tool }),
   setColor: (color) => set({ strokeColor: color }),
   setBaseWidth: (width) => set({ baseWidth: width }),
 
-  beginHistory: () =>
-    set((state) => ({ past: [...state.past, state.strokes].slice(-HISTORY_LIMIT) })),
-  setStrokes: (strokes) => set({ strokes }),
-  addStroke: (stroke) =>
+  beginHistory: () => set((state) => ({ past: [...state.past, state.graph].slice(-HISTORY_LIMIT) })),
+  setGraph: (graph) => set({ graph }),
+  commitStroke: (points, color, raw) =>
     set((state) => ({
-      past: [...state.past, state.strokes].slice(-HISTORY_LIMIT),
-      strokes: [...state.strokes, stroke],
+      past: [...state.past, state.graph].slice(-HISTORY_LIMIT),
+      graph: addStrokeToGraph(state.graph, points, color, raw),
     })),
+  eraseCapsule: (ax, ay, bx, by, r) => {
+    const { graph } = get()
+    const next = eraseGraphCapsule(graph, ax, ay, bx, by, r)
+    if (next === graph) return false
+    set({ graph: next })
+    return true
+  },
   undo: () =>
     set((state) => {
       if (state.past.length === 0) return {}
       const past = state.past.slice()
       const previous = past.pop()!
-      return { strokes: previous, past }
+      return { graph: previous, past }
     }),
-  clear: () => set((state) => ({ past: [...state.past, state.strokes].slice(-HISTORY_LIMIT), strokes: [] })),
+  clear: () => set((state) => ({ past: [...state.past, state.graph].slice(-HISTORY_LIMIT), graph: emptyGraph() })),
 }))

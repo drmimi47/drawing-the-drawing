@@ -1,17 +1,23 @@
 import { useMemo, useRef } from 'react'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
-import { useDrawingStore, type StrokePoint } from '../../store/drawingStore'
+import { useDrawingStore } from '../../store/drawingStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useDrawing } from '../../hooks/useDrawing'
 import { useEraser } from '../../hooks/useEraser'
-import { buildRibbon } from './strokeGeometry'
+import { resolveStrokePoints } from '../../geometry/graph'
+import type { Graph, SamplePoint, Stroke } from '../../types/geometry'
+import { buildRibbon, resampleCentripetalCatmullRom } from './strokeGeometry'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
-/** A single stroke rendered as a flat variable-width triangle ribbon. */
-function StrokeMesh({ points, color }: { points: StrokePoint[]; color: string }) {
-  const geometry = useMemo(() => buildRibbon(points), [points])
+/** A smooth variable-width ribbon for a centerline polyline. */
+function RibbonMesh({ points, color }: { points: SamplePoint[]; color: string }) {
+  const geometry = useMemo(() => {
+    const smooth = resampleCentripetalCatmullRom(points)
+    return buildRibbon(smooth)
+  }, [points])
+
   if (!geometry.positions || !geometry.indices) return null
 
   return (
@@ -23,6 +29,12 @@ function StrokeMesh({ points, color }: { points: StrokePoint[]; color: string })
       <meshBasicMaterial color={color} side={THREE.DoubleSide} toneMapped={false} />
     </mesh>
   )
+}
+
+/** Resolve a graph stroke to centerline points and render it. */
+function StrokeView({ graph, stroke }: { graph: Graph; stroke: Stroke }) {
+  const points = useMemo(() => resolveStrokePoints(graph, stroke), [graph, stroke])
+  return <RibbonMesh points={points} color={stroke.color} />
 }
 
 /**
@@ -68,7 +80,7 @@ function InteractionPlane({
 }
 
 export function DrawingLayer() {
-  const strokes = useDrawingStore((s) => s.strokes)
+  const graph = useDrawingStore((s) => s.graph)
   const toolMode = useDrawingStore((s) => s.toolMode)
   const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
 
@@ -87,10 +99,10 @@ export function DrawingLayer() {
         onPointerMove={handlers.onPointerMove}
         onPointerUp={handlers.onPointerUp}
       />
-      {strokes.map((stroke) => (
-        <StrokeMesh key={stroke.id} points={stroke.points} color={stroke.color} />
+      {graph.strokes.map((stroke) => (
+        <StrokeView key={stroke.id} graph={graph} stroke={stroke} />
       ))}
-      {draw.live && <StrokeMesh points={draw.live} color={draw.liveColor} />}
+      {draw.live && <RibbonMesh points={draw.live} color={draw.liveColor} />}
     </>
   )
 }

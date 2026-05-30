@@ -3,10 +3,40 @@
  * gaps between samples) and assert that NO surviving geometry lies inside the
  * swept eraser path. Run with: npx tsx scripts/eraseStress.ts
  */
-import { eraseStrokesCapsule } from '../src/geometry/erase'
-import type { Stroke } from '../src/store/drawingStore'
+import { clipPolylineCapsule } from '../src/geometry/erase'
+import type { SamplePoint } from '../src/types/geometry'
 
 type Pt = { x: number; y: number }
+
+/** Minimal stand-in for a stroke in this test: just its centerline points. */
+interface Stroke {
+  id: string
+  color: string
+  points: SamplePoint[]
+}
+
+/** Apply the swept-capsule clip to every stroke, mirroring the graph eraser. */
+function eraseStrokesCapsule(
+  strokes: Stroke[],
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  r: number,
+): Stroke[] {
+  let changed = false
+  const out: Stroke[] = []
+  for (const s of strokes) {
+    const { runs, modified } = clipPolylineCapsule(s.points, ax, ay, bx, by, r)
+    if (!modified) {
+      out.push(s)
+      continue
+    }
+    changed = true
+    for (const run of runs) out.push({ id: 'r' + Math.random(), color: s.color, points: run })
+  }
+  return changed ? out : strokes
+}
 
 function distSqPointSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
   const dx = bx - ax

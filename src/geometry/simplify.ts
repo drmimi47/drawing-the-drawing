@@ -1,19 +1,18 @@
 /**
- * Ramer-Douglas-Peucker polyline simplification (Cluster B).
+ * Ramer-Douglas-Peucker polyline simplification (Cluster B/D).
  *
- * Reduces a noisy raw freehand point stream to a compact polyline while keeping
- * the per-point pressure value `p`, which later drives variable stroke width.
+ * Generic over the point type so it preserves whatever attributes a point
+ * carries (e.g. pressure and timestamp on raw samples) while only using x/y for
+ * the distance test.
  */
 
-export interface RawPoint {
+interface Point2D {
   x: number
   y: number
-  /** Pointer pressure 0..1 (0.5 for mouse, variable for pen). */
-  p: number
 }
 
 /** Perpendicular distance from `pt` to the infinite line through `a` and `b`. */
-function perpendicularDistance(pt: RawPoint, a: RawPoint, b: RawPoint): number {
+function perpendicularDistance(pt: Point2D, a: Point2D, b: Point2D): number {
   const dx = b.x - a.x
   const dy = b.y - a.y
   const lengthSq = dx * dx + dy * dy
@@ -29,7 +28,7 @@ function perpendicularDistance(pt: RawPoint, a: RawPoint, b: RawPoint): number {
  * Simplify `points`, keeping any point that deviates more than `epsilon`
  * (world units) from the line between its retained neighbours.
  */
-export function simplifyRDP(points: RawPoint[], epsilon: number): RawPoint[] {
+export function simplifyRDP<T extends Point2D>(points: T[], epsilon: number): T[] {
   if (points.length <= 2) return points.slice()
 
   const first = points[0]

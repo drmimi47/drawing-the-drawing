@@ -77,15 +77,42 @@ src/
     hallucinate.ts    Vercel Edge Function — Anthropic API proxy — STUB, deferred
 
 
-CORE DATA MODEL
----------------
-Vertex   { id, x, y, createdAt, lastSeenTimestamp, lockInfluence }
-Edge     { id, v1Id, v2Id, strokeId, enteredViewportAt, exitedViewportAt }
-Pin      { id, x, y, radius }
-Snapshot { timestamp, vertices: Vertex[], edges: Edge[] }
+CORE DATA MODEL  (layered — editable graph is the source of truth)
+------------------------------------------------------------------
+Architecture decision: the editable model is a planar graph of vertices + edges
+(a PSLG), NOT a Bezier/spline source of truth. Reasons: every planned feature —
+Normalization (snap edge angles), Rationalism (drift vertices to grid), Locking
+(per-vertex influence), Lineage (vertex/edge snapshots), and especially
+Hallucination (LLM edits a JSON segment list) — operates on segments and shared
+vertices. A curve-as-truth model would force a lossy tessellate→operate→re-fit
+round-trip on every mutation and make AI edits topologically fragile. Curves stay
+an OPTIONAL layer (per-vertex tangents / edge curve descriptors) that always
+tessellates down to the polyline graph; this preserves a path to arcs/constraints
+later without blocking the segment-based features now.
 
-Graph is a planar graph. Strokes are simplified on completion (RDP), then
-intersection-tested against existing edges to insert shared vertices at crossings.
+Three decoupled tiers:
+  Tier 1 — Input        Raw pointer samples retained per stroke (re-fit / analysis)
+                        RawSample { x, y, pressure, t }
+  Tier 2 — Edit model   Planar graph; the SOURCE OF TRUTH for editing/mutations/AI
+                        Vertex    { id, x, y }            (position; shared at intersections)
+                        PathPoint { v: vertexId, w }      (per-stroke half-width at that vertex)
+                        Stroke    { id, color, path: PathPoint[], raw?: RawSample[] }
+                        Edge      { id, strokeId, v0, v1 } (derived: consecutive path vertices)
+                        Graph     { vertices: Record<id,Vertex>, strokes: Stroke[] }
+                        (future-reserved on Vertex: tangentIn/Out; on Edge: curve descriptor)
+  Tier 3 — Render       Triangle ribbon, a DERIVED CACHE rebuilt from Tier 2:
+                        centripetal Catmull-Rom resample of the path → smooth
+                        centerline → variable-width ribbon with round caps.
+
+Pin      { id, x, y, radius }            (Cluster H)
+Snapshot { timestamp, graph: Graph }     (Cluster I)
+
+Shared vertices give topology: when stroke B crosses stroke A, one Vertex is
+inserted into BOTH paths at the crossing, so the strokes meet at a real node that
+mutations can act on. Width lives on the PathPoint (per stroke), position on the
+Vertex (shared). Smoothness is a Tier 1/3 concern (retain raw, resample, round
+caps) — independent of the editable model, which fixes the post-finalize
+faceting caused by raw RDP decimation.
 
 Tool state enum:  'DRAW' | 'PAN' | 'LOCK'
 Mutation mode enum:  'NORMALIZATION' | 'RATIONALISM' | 'HALLUCINATION'
@@ -184,16 +211,19 @@ CLUSTER C — Infinite Canvas Navigation
   * Verification Goal: Panning and zooming feel identical in responsiveness to Miro
     or Figma. Holding space temporarily switches to pan without disrupting draw mode.
 
-CLUSTER D — Geometry Graph Compilation & Intersection Engine
-  [ ] Define types: Vertex, Edge, Stroke in types/geometry.ts
-  [ ] On stroke completion: insert simplified polyline vertices + edges into graph store
-  [ ] Intersection engine: test new stroke against all existing edges; where crossings
-      are found, split both segments and insert a shared structural Vertex
-  [ ] Replace raw Line rendering with graph-based Three.js LineSegments (from graph state)
-  [ ] graph.ts API: addStroke(), getEdges(), getVertices()
-  * Verification Goal: Crossing two drawn strokes splits them at the intersection,
-    creating a shared node visible in the graph data structure. Rendering is
-    indistinguishable from the previous Line-based approach.
+CLUSTER D — Geometry Graph Compilation & Intersection Engine (enriched model)
+  [ ] Define Tier 1/2 types in types/geometry.ts (RawSample, Vertex, PathPoint, Stroke, Edge, Graph)
+  [ ] Retain raw pointer samples per stroke (Tier 1); stable IDs on vertices/strokes
+  [ ] On stroke completion: RDP-simplify, build vertices + path, insert into graph store
+  [ ] Intersection engine: test new stroke vs. all existing edges; at each crossing insert
+      ONE shared Vertex into both paths (splitting both), with per-stroke interpolated width
+  [ ] Smooth rendering (Tier 3): centripetal Catmull-Rom resample + variable-width ribbon
+      with round caps; mesh is a derived cache rebuilt from the graph
+  [ ] graph.ts API: addStrokeToGraph(), eraseGraphCapsule(), resolveStrokePoints(), deriveEdges()
+  [ ] Eraser operates on the graph (rebuilds affected strokes; orphan vertices dropped)
+  * Verification Goal: Crossing two strokes inserts a shared node referenced by both
+    (visible in the graph), finalized strokes stay smooth (no faceting), and a graph
+    intersection unit test passes. (Self-intersection within one stroke deferred.)
 
 CLUSTER E — Continuous Viewport Edge Observer
   [ ] On pan-end, zoom-end, and stroke completion: run edge-vs-AABB test for all edges
