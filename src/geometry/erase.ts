@@ -212,8 +212,18 @@ export function eraseStrokesCapsule(
       continue
     }
 
-    const runs = clipPolyline(pts, insideInterval)
-    if (runs.length === 1 && runs[0].length === pts.length) {
+    // Track whether the capsule actually intersected this stroke. Counting
+    // points is NOT a reliable "unchanged" test: trimming a stroke end keeps the
+    // same point count but moves the endpoint, so a point-count check would
+    // wrongly keep the original (leaving the trimmed piece behind).
+    let touched = false
+    const runs = clipPolyline(pts, (p0, p1) => {
+      const interval = insideInterval(p0, p1)
+      if (interval) touched = true
+      return interval
+    })
+
+    if (!touched) {
       out.push(stroke)
       continue
     }
