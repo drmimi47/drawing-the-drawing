@@ -5,6 +5,7 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { ERASE_RADIUS_PX } from '../../hooks/useEraser'
 import { CameraControls } from './CameraControls'
 import { DrawingLayer } from './DrawingLayer'
+import { ObserverDebug } from './ObserverDebug'
 
 /**
  * Root R3F scene for Blindspot.
@@ -54,6 +55,7 @@ export function CanvasScene() {
 
         <CameraControls />
         <DrawingLayer />
+        <ObserverDebug />
       </Canvas>
     </div>
   )

@@ -25,3 +25,54 @@ export function computeViewportAABB(camera: OrthographicCamera): ViewportAABB | 
     maxY: camera.position.y + halfHeight,
   }
 }
+
+/** Shrink an AABB by `margin` on every side. Returns the input if it would invert. */
+export function insetAABB(a: ViewportAABB, margin: number): ViewportAABB {
+  const minX = a.minX + margin
+  const maxX = a.maxX - margin
+  const minY = a.minY + margin
+  const maxY = a.maxY - margin
+  if (maxX < minX || maxY < minY) return a
+  return { minX, maxX, minY, maxY }
+}
+
+/**
+ * Does the segment (x0,y0)-(x1,y1) have any point inside the AABB? Liang-Barsky
+ * clip: true iff the surviving parameter interval is non-empty.
+ */
+export function segmentIntersectsAABB(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  a: ViewportAABB,
+): boolean {
+  const dx = x1 - x0
+  const dy = y1 - y0
+  let t0 = 0
+  let t1 = 1
+
+  const edges: [number, number][] = [
+    [-dx, x0 - a.minX],
+    [dx, a.maxX - x0],
+    [-dy, y0 - a.minY],
+    [dy, a.maxY - y0],
+  ]
+
+  for (const [p, q] of edges) {
+    if (p === 0) {
+      if (q < 0) return false // parallel and outside this slab
+      continue
+    }
+    const r = q / p
+    if (p < 0) {
+      if (r > t1) return false
+      if (r > t0) t0 = r
+    } else {
+      if (r < t0) return false
+      if (r < t1) t1 = r
+    }
+  }
+
+  return t0 <= t1
+}

@@ -84,3 +84,34 @@ body {
   border-radius: 50%;
   background: #d14b4b;
 }
+
+/* ---- Top-right debug toggle ---- */
+.debug-toggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(8px);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.debug-toggle:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.debug-toggle.is-active {
+  color: #3b82f6;
+  border-color: rgba(59, 130, 246, 0.4);
+}
