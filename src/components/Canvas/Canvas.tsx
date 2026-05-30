@@ -1,21 +1,45 @@
+import { useMemo } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { useDrawingStore } from '../../store/drawingStore'
-import { DotGrid } from './DotGrid'
+import { useCanvasStore } from '../../store/canvasStore'
+import { ERASE_RADIUS_PX } from '../../hooks/useEraser'
+import { CameraControls } from './CameraControls'
 import { DrawingLayer } from './DrawingLayer'
 
 /**
  * Root R3F scene for Blindspot.
  *
- * Uses an orthographic camera for a flat, top-down 2D workspace. 1 world unit
- * maps to 1 screen pixel at zoom = 1, which keeps the geometry math intuitive
- * for the drawing + mutation systems added in later clusters.
- *
- * Cluster A scope: scene boots, clears to the light-gray workspace color, and
- * renders the infinite dot grid. Pan/zoom controls arrive in Cluster C.
+ * Orthographic camera for a flat 2D workspace (1 world unit = 1 px at zoom 1),
+ * a plain white background, pan/zoom controls, and the drawing layer.
  */
-export function CanvasScene() {
+
+/** Circular SVG cursor that matches the eraser radius on screen. */
+const ERASER_CURSOR = (() => {
+  const r = ERASE_RADIUS_PX
+  const size = r * 2 + 4
+  const c = size / 2
+  const svg =
+    `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}'>` +
+    `<circle cx='${c}' cy='${c}' r='${r}' fill='rgba(0,0,0,0.04)' stroke='black' stroke-width='1.25'/></svg>`
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${c} ${c}, auto`
+})()
+
+function useCanvasCursor(): string {
   const toolMode = useDrawingStore((s) => s.toolMode)
-  const cursor = toolMode === 'DRAW' ? 'crosshair' : 'default'
+  const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
+  const isPanning = useCanvasStore((s) => s.isPanning)
+
+  return useMemo(() => {
+    if (isPanning) return 'grabbing'
+    if (isSpaceDown || toolMode === 'PAN') return 'grab'
+    if (toolMode === 'DRAW') return 'crosshair'
+    if (toolMode === 'ERASE') return ERASER_CURSOR
+    return 'default'
+  }, [toolMode, isSpaceDown, isPanning])
+}
+
+export function CanvasScene() {
+  const cursor = useCanvasCursor()
 
   return (
     <div className="canvas-layer" style={{ cursor }}>
@@ -25,10 +49,10 @@ export function CanvasScene() {
         gl={{ antialias: true, preserveDrawingBuffer: true }}
         dpr={[1, 2]}
       >
-        {/* Workspace background (#F9F9F9). */}
-        <color attach="background" args={['#f9f9f9']} />
+        {/* Plain white workspace. */}
+        <color attach="background" args={['#ffffff']} />
 
-        <DotGrid />
+        <CameraControls />
         <DrawingLayer />
       </Canvas>
     </div>

@@ -2,7 +2,9 @@ import { useMemo, useRef } from 'react'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { useDrawingStore, type StrokePoint } from '../../store/drawingStore'
+import { useCanvasStore } from '../../store/canvasStore'
 import { useDrawing } from '../../hooks/useDrawing'
+import { useEraser } from '../../hooks/useEraser'
 import { buildRibbon } from './strokeGeometry'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
@@ -25,7 +27,7 @@ function StrokeMesh({ points, color }: { points: StrokePoint[]; color: string })
 
 /**
  * Invisible plane that covers the viewport and follows the camera, used purely
- * to receive pointer events. Its raycast hits give world-space draw coordinates.
+ * to receive pointer events. Its raycast hits give world-space coordinates.
  */
 function InteractionPlane({
   enabled,
@@ -67,20 +69,28 @@ function InteractionPlane({
 
 export function DrawingLayer() {
   const strokes = useDrawingStore((s) => s.strokes)
-  const { active, live, liveColor, onPointerDown, onPointerMove, onPointerUp } = useDrawing()
+  const toolMode = useDrawingStore((s) => s.toolMode)
+  const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
+
+  const draw = useDrawing()
+  const eraser = useEraser()
+
+  // Drawing/erasing is suspended while space is held (space = temporary pan).
+  const interactive = (toolMode === 'DRAW' || toolMode === 'ERASE') && !isSpaceDown
+  const handlers = toolMode === 'ERASE' ? eraser : draw
 
   return (
     <>
       <InteractionPlane
-        enabled={active}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
+        enabled={interactive}
+        onPointerDown={handlers.onPointerDown}
+        onPointerMove={handlers.onPointerMove}
+        onPointerUp={handlers.onPointerUp}
       />
       {strokes.map((stroke) => (
         <StrokeMesh key={stroke.id} points={stroke.points} color={stroke.color} />
       ))}
-      {live && <StrokeMesh points={live} color={liveColor} />}
+      {draw.live && <StrokeMesh points={draw.live} color={draw.liveColor} />}
     </>
   )
 }

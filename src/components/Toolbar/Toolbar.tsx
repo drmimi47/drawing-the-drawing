@@ -1,4 +1,4 @@
-import { Pencil, Hand, MapPin } from 'lucide-react'
+import { Pencil, Eraser, Hand, MapPin } from 'lucide-react'
 import { useDrawingStore, type ToolMode } from '../../store/drawingStore'
 import './Toolbar.css'
 
@@ -11,9 +11,10 @@ import './Toolbar.css'
  */
 
 const TOOLS: { key: ToolMode; label: string; Icon: typeof Pencil }[] = [
-  { key: 'DRAW', label: 'Draw (D)', Icon: Pencil },
-  { key: 'PAN', label: 'Pan (V)', Icon: Hand },
-  { key: 'LOCK', label: 'Lock (L)', Icon: MapPin },
+  { key: 'DRAW', label: 'Draw', Icon: Pencil },
+  { key: 'ERASE', label: 'Erase', Icon: Eraser },
+  { key: 'PAN', label: 'Pan', Icon: Hand },
+  { key: 'LOCK', label: 'Lock', Icon: MapPin },
 ]
 
 const PRESET_COLORS = ['#1a1a1a', '#e23b3b', '#2f6fed', '#1f9d55', '#e8852b']
