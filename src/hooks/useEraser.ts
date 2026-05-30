@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
 import type { OrthographicCamera } from 'three'
 import { useDrawingStore } from '../store/drawingStore'
-import { eraseStrokes } from '../geometry/erase'
+import { eraseStrokesCapsule } from '../geometry/erase'
 
 /** Eraser radius in screen pixels (constant on screen across zoom levels). */
 export const ERASE_RADIUS_PX = 14
@@ -19,13 +19,19 @@ export function useEraser() {
 
   const erasingRef = useRef(false)
   const historyPushedRef = useRef(false)
+  const lastRef = useRef<{ x: number; y: number } | null>(null)
 
   const sample = useCallback(
     (x: number, y: number) => {
       const zoom = (camera as OrthographicCamera).zoom || 1
       const radius = ERASE_RADIUS_PX / zoom
+      // Erase the swept capsule from the previous point to this one (a point on
+      // the first sample), so fast drags leave no gaps.
+      const last = lastRef.current ?? { x, y }
+      lastRef.current = { x, y }
+
       const current = useDrawingStore.getState().strokes
-      const next = eraseStrokes(current, x, y, radius)
+      const next = eraseStrokesCapsule(current, last.x, last.y, x, y, radius)
       if (next !== current) {
         // One undo step per erase drag: snapshot the first time it changes.
         if (!historyPushedRef.current) {
@@ -53,6 +59,7 @@ export function useEraser() {
       ;(e.nativeEvent.target as Element | null)?.setPointerCapture?.(e.nativeEvent.pointerId)
       erasingRef.current = true
       historyPushedRef.current = false
+      lastRef.current = null // start fresh; first sample erases a circle
       sample(e.point.x, e.point.y)
     },
     [sample],

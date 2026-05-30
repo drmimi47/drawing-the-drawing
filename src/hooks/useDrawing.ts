@@ -51,6 +51,7 @@ export function useDrawing() {
   const onPointerDown = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
       const ne = e.nativeEvent
+      if (ne.button !== 0) return // only the primary button draws (middle/right pan, etc.)
       ;(ne.target as Element | null)?.setPointerCapture?.(ne.pointerId)
 
       usePressureRef.current = ne.pointerType === 'pen'
