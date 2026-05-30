@@ -21,7 +21,7 @@ interface ObserverState {
 
 export const useObserverStore = create<ObserverState>((set) => ({
   debug: true,
-  marginPx: 70,
+  marginPx: 140,
   toggleDebug: () => set((s) => ({ debug: !s.debug })),
   setMargin: (px) => set({ marginPx: px }),
 }))
