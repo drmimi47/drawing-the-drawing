@@ -18,9 +18,11 @@ function easeInOutCubic(t: number): number {
 export function NormalizeMenu() {
   const selectedStrokeIds = useDrawingStore((s) => s.selectedStrokeIds)
 
+  const DEFAULT_STRENGTH = 0.5
+
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [session, setSession] = useState<{ x: number; y: number } | null>(null)
-  const [strength, setStrength] = useState(1)
+  const [strength, setStrength] = useState(DEFAULT_STRENGTH)
 
   const originals = useRef<Map<string, { x: number; y: number }>>(new Map())
   const targets = useRef<Map<string, { x: number; y: number }>>(new Map())
@@ -46,8 +48,8 @@ export function NormalizeMenu() {
       store.beginHistory() // snapshot original graph for one-step undo
       setMenu(null)
       setSession(at)
-      setStrength(1)
-      applyPreview(1)
+      setStrength(DEFAULT_STRENGTH)
+      applyPreview(DEFAULT_STRENGTH)
     },
     [applyPreview],
   )

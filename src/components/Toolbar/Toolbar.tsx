@@ -1,4 +1,4 @@
-import { Pencil, Eraser, BoxSelect, Hand } from 'lucide-react'
+import { Pencil, Eraser, BoxSelect, Lasso, PenTool, Hand } from 'lucide-react'
 import { useDrawingStore, type ToolMode } from '../../store/drawingStore'
 import './Toolbar.css'
 
@@ -6,14 +6,16 @@ import './Toolbar.css'
  * Floating bottom-center tool dock.
  *
  * Tools select the active interaction mode; the color swatches set the stroke
- * color. Select (marquee) feeds the right-click "Normalize" command. Lock/Intent
- * tools arrive in Cluster H.
+ * color. Select (marquee) and Lasso (freehand) feed the right-click "Normalize"
+ * command. Vector edits anchor points directly. Lock/Intent tools arrive in Cluster H.
  */
 
 const TOOLS: { key: ToolMode; label: string; Icon: typeof Pencil }[] = [
   { key: 'DRAW', label: 'Draw', Icon: Pencil },
   { key: 'ERASE', label: 'Erase', Icon: Eraser },
-  { key: 'SELECT', label: 'Select', Icon: BoxSelect },
+  { key: 'SELECT', label: 'Marquee select', Icon: BoxSelect },
+  { key: 'LASSO', label: 'Lasso select', Icon: Lasso },
+  { key: 'VECTOR', label: 'Vector edit', Icon: PenTool },
   { key: 'PAN', label: 'Pan', Icon: Hand },
 ]
 

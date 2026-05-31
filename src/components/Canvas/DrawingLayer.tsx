@@ -5,10 +5,12 @@ import { useDrawingStore } from '../../store/drawingStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useDrawing } from '../../hooks/useDrawing'
 import { useEraser } from '../../hooks/useEraser'
-import { useSelection, type MarqueeRect } from '../../hooks/useSelection'
+import { useSelection } from '../../hooks/useSelection'
+import { useVectorEdit } from '../../hooks/useVectorEdit'
 import { resolveStrokePoints } from '../../geometry/graph'
 import type { Graph, SamplePoint, Stroke } from '../../types/geometry'
 import { buildRibbon, resampleCentripetalCatmullRom } from './strokeGeometry'
+import { MarchingAntsLine } from './MarchingAntsLine'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
@@ -40,20 +42,29 @@ function StrokeView({ graph, stroke, selected }: { graph: Graph; stroke: Stroke;
   return <RibbonMesh points={points} color={selected ? SELECTION_COLOR : stroke.color} />
 }
 
-/** Marquee selection rectangle overlay. */
-function MarqueeOverlay({ rect }: { rect: MarqueeRect }) {
+/** Cosmetic anchor-point handles for the VECTOR edit tool (picking is on the plane). */
+function VectorHandles({ graph }: { graph: Graph }) {
   const positions = useMemo(() => {
-    const { x0, y0, x1, y1 } = rect
-    return new Float32Array([x0, y0, 2, x1, y0, 2, x1, y1, 2, x0, y1, 2])
-  }, [rect])
+    const ids = Object.keys(graph.vertices)
+    const arr = new Float32Array(ids.length * 3)
+    ids.forEach((id, i) => {
+      const v = graph.vertices[id]
+      arr[i * 3] = v.x
+      arr[i * 3 + 1] = v.y
+      arr[i * 3 + 2] = 4
+    })
+    return arr
+  }, [graph])
+
+  if (positions.length === 0) return null
 
   return (
-    <lineLoop renderOrder={20}>
+    <points raycast={() => null} renderOrder={25}>
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
-      <lineBasicMaterial color={SELECTION_COLOR} depthTest={false} />
-    </lineLoop>
+      <pointsMaterial size={8} sizeAttenuation={false} color={SELECTION_COLOR} depthTest={false} />
+    </points>
   )
 }
 
@@ -108,14 +119,26 @@ export function DrawingLayer() {
   const draw = useDrawing()
   const eraser = useEraser()
   const selection = useSelection()
+  const vectorEdit = useVectorEdit()
 
   const selectedSet = useMemo(() => new Set(selectedStrokeIds), [selectedStrokeIds])
 
-  // Pointer routing per tool (suspended while space is held = temporary pan).
+  const isSelectionTool = toolMode === 'SELECT' || toolMode === 'LASSO'
   const interactive =
-    (toolMode === 'DRAW' || toolMode === 'ERASE' || toolMode === 'SELECT') && !isSpaceDown
+    (toolMode === 'DRAW' ||
+      toolMode === 'ERASE' ||
+      toolMode === 'VECTOR' ||
+      isSelectionTool) &&
+    !isSpaceDown
+
   const handlers =
-    toolMode === 'ERASE' ? eraser : toolMode === 'SELECT' ? selection : draw
+    toolMode === 'ERASE'
+      ? eraser
+      : isSelectionTool
+        ? selection
+        : toolMode === 'VECTOR'
+          ? vectorEdit
+          : draw
 
   return (
     <>
@@ -129,7 +152,10 @@ export function DrawingLayer() {
         <StrokeView key={stroke.id} graph={graph} stroke={stroke} selected={selectedSet.has(stroke.id)} />
       ))}
       {draw.live && <RibbonMesh points={draw.live} color={draw.liveColor} />}
-      {selection.marquee && <MarqueeOverlay rect={selection.marquee} />}
+      {selection.outline && (
+        <MarchingAntsLine points={selection.outline.points} closed={selection.outline.closed} />
+      )}
+      {toolMode === 'VECTOR' && <VectorHandles graph={graph} />}
     </>
   )
 }

@@ -11,8 +11,11 @@ import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
  * crossings into shared vertices. Undo snapshots the whole graph.
  */
 
-export type ToolMode = 'DRAW' | 'ERASE' | 'PAN' | 'SELECT'
+export type ToolMode = 'DRAW' | 'ERASE' | 'PAN' | 'SELECT' | 'LASSO' | 'VECTOR'
 export type Stage = 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
+
+/** Tools that maintain (rather than clear) the current selection. */
+const SELECTION_TOOLS = new Set<ToolMode>(['SELECT', 'LASSO'])
 
 const HISTORY_LIMIT = 100
 
@@ -61,8 +64,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   setTool: (tool) =>
     set((state) => ({
       toolMode: tool,
-      // Leaving Select clears the highlight so it doesn't linger over other tools.
-      selectedStrokeIds: tool === 'SELECT' ? state.selectedStrokeIds : [],
+      // Leaving the selection tools clears the highlight so it doesn't linger.
+      selectedStrokeIds: SELECTION_TOOLS.has(tool) ? state.selectedStrokeIds : [],
     })),
   setStage: (stage) => set({ stage }),
   setColor: (color) => set({ strokeColor: color }),
