@@ -131,11 +131,18 @@ TIME DECAY
   - DECAY_MAX_MS = 30 000 ms default (tunable constant)
   - lockInfluence per vertex (0–1) reduces magnitude: effectiveMag = mag * (1 - lockInfluence)
 
-NORMALIZATION — IMPLEMENTED (local, procedural)
-  - Per re-entering edge: measure angle → snap to nearest 15° increment if within threshold
-  - Detect near-parallel neighbors (within 10°) → apply small attractive force toward shared angle
-  - Force relaxation pass on adjacent vertices to prevent tearing at shared joints
-  - Operates edge-by-edge; no opinion on global composition
+NORMALIZATION — IMPLEMENTED (primitive fitting, per stroke)
+  - Classifies a whole stroke and fits a cleaner geometric primitive:
+      open stroke            → best-fit straight line (PCA); snaps to exact H/V within 8°
+      closed + round + dense → fitted circle (Kåsa algebraic fit)
+      closed, 3 corners      → clean triangle
+      closed, 4 corners      → fitted rectangle (orientation from corner edges, right angles)
+      other closed           → left alone (ellipse / general polygon are future work)
+  - Corners found via adaptive RDP around the loop; points morph along the cleaned
+    edges by arc-length so corners snap to corners and edges straighten.
+  - CONTINUOUS morph: while unobserved, geometry interpolates toward its primitive by
+    clamp(timeOutside / DECAY_MAX_MS, 0, 1) every frame (eased) — not an on/off snap.
+    Re-entry freezes the shape; a later exit re-fits from the cleaner geometry.
 
 RATIONALISM — DEFERRED (global, procedural)
   - Seed a constraint field from existing geometry; vertices drift toward grid intersections
