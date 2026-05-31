@@ -11,7 +11,7 @@ import { useDrawingStore, type Stage, type ToolMode } from '../../store/drawingS
 const STAGES: { key: Stage; label: string; tool?: ToolMode; ready: boolean }[] = [
   { key: 'SKETCH', label: 'Sketch', tool: 'DRAW', ready: true },
   { key: 'NORMALIZE', label: 'Normalize', tool: 'SELECT', ready: true },
-  { key: 'LOCK_INTENT', label: 'Lock / Intent', ready: false },
+  { key: 'LOCK_INTENT', label: 'Lock / Intent', tool: 'LASSO_LOCK', ready: true },
   { key: 'GENERATE', label: 'Generate', ready: false },
 ]
 

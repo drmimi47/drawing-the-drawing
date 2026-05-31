@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Graph, RawSample, SamplePoint } from '../types/geometry'
+import type { Graph, LockPolygon, RawSample, SamplePoint } from '../types/geometry'
 import { emptyGraph } from '../types/geometry'
 import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
 
@@ -11,11 +11,13 @@ import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
  * crossings into shared vertices. Undo snapshots the whole graph.
  */
 
-export type ToolMode = 'DRAW' | 'ERASE' | 'PAN' | 'SELECT' | 'LASSO' | 'VECTOR'
+export type ToolMode = 'DRAW' | 'ERASE' | 'PAN' | 'SELECT' | 'LASSO' | 'VECTOR' | 'LASSO_LOCK'
 export type Stage = 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
 
 /** Tools that maintain (rather than clear) the current selection. */
 const SELECTION_TOOLS = new Set<ToolMode>(['SELECT', 'LASSO'])
+
+let lockCounter = 0
 
 const HISTORY_LIMIT = 100
 
@@ -28,6 +30,8 @@ interface DrawingState {
   graph: Graph
   /** IDs of strokes currently selected (for selection-scoped normalize). */
   selectedStrokeIds: string[]
+  /** Geometric lock regions (feathered) that gate normalize/generate. */
+  lockPolygons: LockPolygon[]
   /** Undo history: graph snapshots taken before each action. */
   past: Graph[]
 
@@ -37,6 +41,9 @@ interface DrawingState {
   setBaseWidth: (width: number) => void
   setSelection: (ids: string[]) => void
   clearSelection: () => void
+  addLock: (lock: Omit<LockPolygon, 'id'>) => void
+  removeLock: (id: string) => void
+  clearLocks: () => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
 
@@ -59,6 +66,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   baseWidth: 3.5,
   graph: emptyGraph(),
   selectedStrokeIds: [],
+  lockPolygons: [],
   past: [],
 
   setTool: (tool) =>
@@ -72,6 +80,12 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   setBaseWidth: (width) => set({ baseWidth: width }),
   setSelection: (ids) => set({ selectedStrokeIds: ids }),
   clearSelection: () => set({ selectedStrokeIds: [] }),
+  addLock: (lock) =>
+    set((state) => ({
+      lockPolygons: [...state.lockPolygons, { ...lock, id: `lock-${Date.now()}-${lockCounter++}` }],
+    })),
+  removeLock: (id) => set((state) => ({ lockPolygons: state.lockPolygons.filter((l) => l.id !== id) })),
+  clearLocks: () => set({ lockPolygons: [] }),
   setVertexPositions: (updates) =>
     set((state) => {
       const vertices = { ...state.graph.vertices }

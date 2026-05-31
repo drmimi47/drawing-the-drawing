@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDrawingStore } from '../../store/drawingStore'
 import { computeNormalizeTargets } from '../../geometry/mutations/normalizeSelection'
+import { computeLockInfluences } from '../../geometry/locks'
 
 /**
  * Selection-scoped Normalize (Cluster G, G3).
@@ -26,13 +27,16 @@ export function NormalizeMenu() {
 
   const originals = useRef<Map<string, { x: number; y: number }>>(new Map())
   const targets = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const influences = useRef<Map<string, number>>(new Map())
 
   const applyPreview = useCallback((m: number) => {
     const eased = easeInOutCubic(m)
     const updates: Record<string, { x: number; y: number }> = {}
     originals.current.forEach((o, vid) => {
       const t = targets.current.get(vid) ?? o
-      updates[vid] = { x: o.x + (t.x - o.x) * eased, y: o.y + (t.y - o.y) * eased }
+      // Locked vertices resist: scale the morph by (1 - lock influence).
+      const factor = eased * (1 - (influences.current.get(vid) ?? 0))
+      updates[vid] = { x: o.x + (t.x - o.x) * factor, y: o.y + (t.y - o.y) * factor }
     })
     useDrawingStore.getState().setVertexPositions(updates)
   }, [])
@@ -45,6 +49,7 @@ export function NormalizeMenu() {
       const { originals: o, targets: t } = computeNormalizeTargets(store.graph, ids)
       originals.current = o
       targets.current = t
+      influences.current = computeLockInfluences(store.graph, store.lockPolygons)
       store.beginHistory() // snapshot original graph for one-step undo
       setMenu(null)
       setSession(at)

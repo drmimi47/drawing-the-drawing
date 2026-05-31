@@ -35,6 +35,7 @@ function useCanvasCursor(): string {
     if (toolMode === 'DRAW') return 'crosshair'
     if (toolMode === 'ERASE') return ERASER_CURSOR
     if (toolMode === 'SELECT' || toolMode === 'LASSO') return 'crosshair'
+    if (toolMode === 'LASSO_LOCK') return 'crosshair'
     if (toolMode === 'VECTOR') return 'default'
     return 'default'
   }, [toolMode, isSpaceDown, isPanning])

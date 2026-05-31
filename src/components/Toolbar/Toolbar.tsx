@@ -1,4 +1,4 @@
-import { Pencil, Eraser, BoxSelect, Lasso, PenTool, Hand } from 'lucide-react'
+import { Pencil, Eraser, BoxSelect, Lasso, PenTool, Lock, Hand } from 'lucide-react'
 import { useDrawingStore, type ToolMode } from '../../store/drawingStore'
 import './Toolbar.css'
 
@@ -16,6 +16,7 @@ const TOOLS: { key: ToolMode; label: string; Icon: typeof Pencil }[] = [
   { key: 'SELECT', label: 'Marquee select', Icon: BoxSelect },
   { key: 'LASSO', label: 'Lasso select', Icon: Lasso },
   { key: 'VECTOR', label: 'Vector edit', Icon: PenTool },
+  { key: 'LASSO_LOCK', label: 'Lock region', Icon: Lock },
   { key: 'PAN', label: 'Pan', Icon: Hand },
 ]
 

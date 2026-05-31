@@ -61,4 +61,15 @@ export interface Graph {
   strokes: Stroke[]
 }
 
+/**
+ * A geometric lock region (Cluster H). Geometry strictly inside the polygon is
+ * frozen (influence 1.0); outside, influence falls off linearly to 0 across
+ * `featherRadius` — a soft "negotiation" boundary for normalize/generate.
+ */
+export interface LockPolygon {
+  id: string
+  points: { x: number; y: number }[]
+  featherRadius: number
+}
+
 export const emptyGraph = (): Graph => ({ vertices: {}, strokes: [] })

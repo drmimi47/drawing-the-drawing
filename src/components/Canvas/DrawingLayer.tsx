@@ -7,10 +7,12 @@ import { useDrawing } from '../../hooks/useDrawing'
 import { useEraser } from '../../hooks/useEraser'
 import { useSelection } from '../../hooks/useSelection'
 import { useVectorEdit } from '../../hooks/useVectorEdit'
+import { useLockTool } from '../../hooks/useLockTool'
 import { resolveStrokePoints } from '../../geometry/graph'
 import type { Graph, SamplePoint, Stroke } from '../../types/geometry'
 import { buildRibbon, resampleCentripetalCatmullRom } from './strokeGeometry'
 import { MarchingAntsLine } from './MarchingAntsLine'
+import { LockFieldView } from './LockFieldView'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
@@ -114,12 +116,14 @@ export function DrawingLayer() {
   const graph = useDrawingStore((s) => s.graph)
   const toolMode = useDrawingStore((s) => s.toolMode)
   const selectedStrokeIds = useDrawingStore((s) => s.selectedStrokeIds)
+  const lockPolygons = useDrawingStore((s) => s.lockPolygons)
   const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
 
   const draw = useDrawing()
   const eraser = useEraser()
   const selection = useSelection()
   const vectorEdit = useVectorEdit()
+  const lockTool = useLockTool()
 
   const selectedSet = useMemo(() => new Set(selectedStrokeIds), [selectedStrokeIds])
 
@@ -128,6 +132,7 @@ export function DrawingLayer() {
     (toolMode === 'DRAW' ||
       toolMode === 'ERASE' ||
       toolMode === 'VECTOR' ||
+      toolMode === 'LASSO_LOCK' ||
       isSelectionTool) &&
     !isSpaceDown
 
@@ -138,7 +143,9 @@ export function DrawingLayer() {
         ? selection
         : toolMode === 'VECTOR'
           ? vectorEdit
-          : draw
+          : toolMode === 'LASSO_LOCK'
+            ? lockTool
+            : draw
 
   return (
     <>
@@ -148,12 +155,16 @@ export function DrawingLayer() {
         onPointerMove={handlers.onPointerMove}
         onPointerUp={handlers.onPointerUp}
       />
+      <LockFieldView locks={lockPolygons} />
       {graph.strokes.map((stroke) => (
         <StrokeView key={stroke.id} graph={graph} stroke={stroke} selected={selectedSet.has(stroke.id)} />
       ))}
       {draw.live && <RibbonMesh points={draw.live} color={draw.liveColor} />}
       {selection.outline && (
         <MarchingAntsLine points={selection.outline.points} closed={selection.outline.closed} />
+      )}
+      {lockTool.outline && lockTool.outline.points.length > 1 && (
+        <MarchingAntsLine points={lockTool.outline.points} closed color="#e23b3b" />
       )}
       {toolMode === 'VECTOR' && <VectorHandles graph={graph} />}
     </>
