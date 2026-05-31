@@ -1,7 +1,54 @@
 BLINDSPOT — IMPLEMENTATION PLAN
 ================================================================================
-A second-order cybernetics sketching tool where geometry persists only while
-observed. Optimized for step-by-step development using generative code agents.
+A sketch-to-plan ideation tool: designers draw rough freehand geometry, clean it
+into legible linework, lock what works, and generate new ideas under those
+constraints. Optimized for step-by-step development using generative code agents.
+
+
+DESIGNER WORKFLOW (the core sequence)
+-------------------------------------
+The three former "modes" are now stages of one guided, non-modal loop. The user
+can move freely between them; the UI suggests the next step but never forces it.
+
+  1. SKETCH      Freehand draw rough geometry (done — Clusters B–D).
+  2. NORMALIZE   Explicit "Clean up" command morphs rough strokes into clean
+                 primitives (line / H-V / circle / triangle / rectangle). Preview,
+                 then accept or reject. Re-sketch and re-normalize as often as wanted.
+  3. LOCK        Mark regions you're happy with as protected. Locks freeze geometry
+                 against BOTH further normalization and generation.
+  4. GENERATE    "Hallucination": send the drawing to an LLM with locked geometry as
+                 fixed anchors and unlocked area as the region to extend/complete —
+                 vector inpainting, a controllable alternative to a diffusion model.
+                 Returned geometry arrives as a reviewable layer (accept / reject).
+
+  Loop: sketch ⇄ normalize ⇄ lock ⇄ generate, in any order, repeatedly.
+
+DESIGN PRINCIPLES (non-negotiable for professional use)
+  - Deliberate, not ambient: transforms run on command, never as a side effect of
+    panning. (The original viewport-driven auto-mutation survives only as an OPTIONAL
+    "ambient" toggle, off by default.)
+  - Non-destructive: every normalize/generate is preview → accept/reject, fully
+    undoable, and snapshotted to version history before it runs.
+  - Predictable locking: the user can always see exactly what is protected.
+  - Editable end to end: generation returns vectors into the planar graph, never
+    raster — so any AI output remains hand-editable.
+
+
+POSITIONING & PRACTICAL INTEGRATION (be honest about scope)
+-----------------------------------------------------------
+Target: the EARLY ideation phase of planning — the napkin sketch becoming a legible
+diagram and a springboard for alternatives. This is the opposite end of the pipeline
+from Bluebeam Revu, which is precision markup, measurement, and takeoff on finished
+PDFs. So this tool AIDS that workflow rather than replacing it: it is the ideation
+front-end that hands off to Bluebeam / CAD.
+
+Implications that shape the plan:
+  - Interop is a feature, not polish: import a PDF/image as a dimmed underlay to
+    sketch over (mirrors tracing in Bluebeam); export SVG / PDF / PNG (DXF later) so
+    output flows downstream. (Cluster K.)
+  - Real-world scale and dimensions are deferred but anticipated: a PDF underlay +
+    "set scale by reference" is the highest-leverage future addition.
+  - Rationalism mode is OUT OF SCOPE for now (removed from the sequence).
 
 
 TECH STACK
@@ -26,8 +73,12 @@ CANVAS
   - Full 100vw / 100vh app wrapper; no scrollbars
 
 TOOLBARS
-  - Floating bottom-center dock: tool selector (Draw / Pan / Lock)
-  - Floating top-left: mutation mode selector (Normalization / Rationalism / Hallucination)
+  - Floating bottom-center dock: tool selector (Draw / Erase / Pan / Lock)
+  - Floating top-center: STAGE indicator + suggested next action
+      [ Sketch ] → [ Clean up ] → [ Lock ] → [ Generate ]
+    Highlights the current stage and surfaces the primary action button for it
+    (e.g. "Clean up" runs normalization with a strength control; "Generate" runs
+    the LLM). Non-modal — clicking any stage is allowed at any time.
   - Clean icons, active-state highlight, smooth hover transitions
   - No heavy chrome — the drawing surface dominates
 
@@ -46,10 +97,10 @@ PROJECT STRUCTURE
 -----------------
 src/
   components/
-    Canvas/           R3F scene, OrthographicCamera, stroke + graph rendering
-    Toolbar/          Tool dock, mutation mode buttons, evolution reveal toggle
+    Canvas/           R3F scene, OrthographicCamera, stroke + graph rendering, observer
+    Toolbar/          Tool dock, stage indicator + primary action, debug toggle
     LockPin/          Pin mesh + influence glow inside the Canvas scene
-    EvolutionPanel/   History reveal overlay controls
+    HistoryPanel/     Version history / trace-paper overlay controls
   hooks/
     useDrawing.ts     Pointer event → raw point stream → polyline
     useViewport.ts    Camera pan/zoom state; AABB computed on every frame change
@@ -60,21 +111,19 @@ src/
     graph.ts          Vertex/Edge graph; addStroke(); intersection detection
     simplify.ts       Ramer-Douglas-Peucker implementation
     mutations/
-      normalize.ts    Angular snapping + force relaxation — IMPLEMENTED
-      rationalize.ts  Global grid field resolution — STUB, deferred
-      hallucinate.ts  Anthropic API geometry completion — STUB, deferred
+      normalize.ts    Primitive fitting (line/H-V/circle/triangle/rectangle) — IMPLEMENTED
+      generate.ts     Build LLM request from locked/unlocked graph; parse response — Cluster I
   shaders/
     influence.frag    Smooth metaball radial falloff for lock pin glow
-    history.vert      Per-layer opacity uniform for evolution reveal
+    history.vert      Per-layer opacity uniform for the trace-paper overlay
   store/
-    drawingStore.ts   Zustand: graph, pins, tool mode, mutation mode, history, reveal flag
+    drawingStore.ts   Zustand: graph, pins/locks, tool, stage, history
   utils/
     viewport.ts       AABB math, edge-vs-viewport intersection tests
-    noise.ts          Perlin noise (used by Rationalism when implemented)
   types/
-    geometry.ts       Vertex, Edge, Stroke, Snapshot, Pin type definitions
+    geometry.ts       RawSample, Vertex, PathPoint, Stroke, Edge, Graph, Pin, Snapshot
   api/
-    hallucinate.ts    Vercel Edge Function — Anthropic API proxy — STUB, deferred
+    hallucinate.ts    Vercel Edge Function — Anthropic API proxy — Cluster I
 
 
 CORE DATA MODEL  (layered — editable graph is the source of truth)
@@ -114,24 +163,13 @@ Vertex (shared). Smoothness is a Tier 1/3 concern (retain raw, resample, round
 caps) — independent of the editable model, which fixes the post-finalize
 faceting caused by raw RDP decimation.
 
-Tool state enum:  'DRAW' | 'PAN' | 'LOCK'
-Mutation mode enum:  'NORMALIZATION' | 'RATIONALISM' | 'HALLUCINATION'
+Tool state enum:  'DRAW' | 'ERASE' | 'PAN' | 'LOCK'
+Stage enum:       'SKETCH' | 'NORMALIZE' | 'LOCK' | 'GENERATE'
 
 
-MUTATION RULES (implementation detail)
----------------------------------------
-VIEWPORT OBSERVER
-  - Orthographic camera bounds = viewport AABB, recalculated on every pan/zoom event
-  - On pan-end or zoom-end: diff currently visible edges vs. previous frame
-  - Edges crossing OUT: record exitedViewportAt = Date.now()
-  - Edges crossing IN:  compute timeOutside = now - exitedViewportAt; queue for mutation
-
-TIME DECAY
-  - mutationMagnitude = clamp(timeOutside / DECAY_MAX_MS, 0, 1)
-  - DECAY_MAX_MS = 30 000 ms default (tunable constant)
-  - lockInfluence per vertex (0–1) reduces magnitude: effectiveMag = mag * (1 - lockInfluence)
-
-NORMALIZATION — IMPLEMENTED (primitive fitting, per stroke)
+TRANSFORMS (implementation detail)
+----------------------------------
+NORMALIZE — IMPLEMENTED (primitive fitting, per stroke)
   - Classifies a whole stroke and fits a cleaner geometric primitive:
       open stroke            → best-fit straight line (PCA); snaps to exact H/V within 8°
       closed + round + dense → fitted circle (Kåsa algebraic fit)
@@ -140,45 +178,71 @@ NORMALIZATION — IMPLEMENTED (primitive fitting, per stroke)
       other closed           → left alone (ellipse / general polygon are future work)
   - Corners found via adaptive RDP around the loop; points morph along the cleaned
     edges by arc-length so corners snap to corners and edges straighten.
-  - CONTINUOUS morph: while unobserved, geometry interpolates toward its primitive by
-    clamp(timeOutside / DECAY_MAX_MS, 0, 1) every frame (eased) — not an on/off snap.
-    Re-entry freezes the shape; a later exit re-fits from the cleaner geometry.
+  - Morph is parameterized by a strength m ∈ [0,1] (lerp original → primitive, eased).
+  - INVOCATION (reworked in Cluster G): an explicit "Clean up" command runs it on all
+    UNLOCKED strokes with a user strength control, as a preview the user accepts or
+    rejects. Locked geometry is skipped. It is no longer triggered by panning.
 
-RATIONALISM — DEFERRED (global, procedural)
-  - Seed a constraint field from existing geometry; vertices drift toward grid intersections
-  - Short dangling edges extend toward adjacencies; near-closed polygons close fully
-  - Stub only — selecting this mode is a no-op in the current build
+AMBIENT MODE — OPTIONAL (the original BLINDSPOT mechanic, off by default)
+  - Viewport observer (built in Cluster E) tracks per-edge time-outside the observation
+    boundary; while a stroke is unobserved it morphs toward its primitive by
+    clamp(timeOutside / DECAY_MAX_MS, 0, 1). Re-entry freezes it.
+  - Retained as a toggle for the conceptual/demo experience; the deliberate "Clean up"
+    command is the default, professional path.
 
-HALLUCINATION — DEFERRED (LLM, multi-modal)
-  - Serialize visible graph → JSON segment list → POST to Anthropic API (claude-sonnet-4-6)
-  - Parse returned geometry → diff against current graph → animate new edges in over 1–2s
-  - Vercel Edge Function proxies the call (API key stays server-side)
-  - Stub only — api/hallucinate.ts returns { segments: [] } placeholder
+LOCK — gates BOTH normalize and generate
+  - lockInfluence per vertex (0–1); effectiveStrength = m * (1 - lockInfluence)
+  - At influence 1 a vertex is frozen (skipped by normalize and treated as a fixed
+    anchor by generate). Details in LOCKING MECHANISM below.
+
+GENERATE ("Hallucination") — constraint-guided vector completion (LLM)
+  - Serialize the graph split into LOCKED (fixed anchors / the "mask") and UNLOCKED
+    (the region to extend or complete) → JSON segment list.
+  - POST to the Anthropic API (claude-sonnet-4-6 via a Vercel Edge Function; key stays
+    server-side) with a spatial-completion prompt: keep locked geometry exactly, extend
+    short segments toward adjacencies, close implied enclosures, propose plausible
+    additions in the unlocked area.
+  - Parse returned segments → add as a NEW reviewable layer (accept / reject), animated
+    in over 1–2s. Output is vectors merged into the planar graph, so it stays editable.
+  - This is the "controlled diffusion" idea as inpainting: locks are the mask; a
+    strength/temperature control governs how far it deviates.
 
 
 LOCKING MECHANISM
 -----------------
-- Pins placed by shift+click when tool is 'LOCK'
-- Influence per vertex: influence_i = clamp(1 - dist(v, pin)² / pin.radius², 0, 1)
-- Multiple pins: totalInfluence = clamp(sum of all influences, 0, 1)
-- Visualized as soft glowing red rings (influence.frag shader, smooth radial falloff)
-- Effective mutation magnitude: effectiveMag = baseMag * (1 - totalInfluence)
+Lock = "approve / protect": locked geometry is skipped by Clean up and held fixed by
+Generate (it is the inpainting mask).
+- Metaball pins (signature): shift+click when tool is 'LOCK'
+    influence_i = clamp(1 - dist(v, pin)² / pin.radius², 0, 1)
+    multiple pins: totalInfluence = clamp(sum of all influences, 0, 1)
+    visualized as soft glowing rings (influence.frag shader, smooth radial falloff)
+- Region lock (predictable alternative): drag a rectangle / lasso to mark vertices as
+    fully locked (influence = 1). Pros want to see exactly what is protected.
+- effectiveStrength = m * (1 - totalInfluence) feeds both normalize and generate.
 
 
-EVOLUTIONARY LINEAGE
---------------------
-- On every mutation event: deep-clone current graph → push Snapshot to history array
-- History is invisible during normal session
-- On reveal: render all snapshots as stacked Three.js LineSegments layers
-  - opacity = lerp(0.05, 1.0, index / total)  — oldest = faintest, newest = darkest
-  - All layers render simultaneously (light-table effect, not animation)
-- "Export Artwork" button: capture canvas via Three.js preserveDrawingBuffer → PNG
+VERSION HISTORY (formerly "evolutionary lineage")
+-------------------------------------------------
+The mechanism that makes the destructive steps safe — reframed from art reveal to
+trustworthy versioning.
+- Snapshot the whole graph BEFORE each transform (Clean up / Generate / Ambient run).
+- Browse and restore any prior version; undo/redo across transforms.
+- "Trace-paper" overlay view (optional, the original lineage aesthetic): render all
+  snapshots stacked with opacity = lerp(0.05, 1.0, index/total) to see the evolution.
+- "Export" captures the current state (raster PNG now; SVG/PDF vector in Cluster K).
 
 
 IMPLEMENTATION CLUSTERS
 -----------------------
 Execute clusters sequentially. Each must compile and pass its verification goal
 before moving to the next.
+
+STATUS: Clusters A–F are COMPLETE — scaffold, freehand drawing, navigation,
+geometry graph + intersections + smooth rendering, viewport observer, and
+Normalization (primitive fitting: line/H-V/circle/triangle/rectangle). The eraser
+was also added. Clusters G+ below are the workflow restructure (sketch → normalize
+→ lock → generate) and replace the old G–J (mode state machine / Rationalism are
+dropped).
 
 CLUSTER A — Project Scaffold & Canvas Viewport
   [ ] Initialize Vite + React + TypeScript app (npm create vite)
@@ -254,54 +318,67 @@ CLUSTER F — Normalization Mode (full implementation)
     then panning back shows lines self-aligning toward angular coherence. The effect
     scales with time out of view.
 
-CLUSTER G — Mutation Mode State Machine (skeleton)
-  [ ] Expand store: mutationMode: 'NORMALIZATION' | 'RATIONALISM' | 'HALLUCINATION'
-  [ ] Add mutation mode toggle panel to the top-left floating toolbar
-  [ ] Rationalism stub: mode switch is a no-op on mutation trigger; console.log intent
-  [ ] rationalize.ts: exported stub function with TODO comment and documented placeholder
-  [ ] api/hallucinate.ts: Vercel Edge Function returning { segments: [] }
-  [ ] hallucinate.ts client: serializes graph to JSON but returns early without API call
-  * Verification Goal: Switching between all three modes updates the store without
-    errors. Normalization still runs correctly. Rationalism and Hallucination are
-    silent no-ops.
+CLUSTER G — Workflow Orchestration + Explicit "Clean up"
+  [ ] Add stage state: stage: 'SKETCH' | 'NORMALIZE' | 'LOCK' | 'GENERATE' (non-modal).
+  [ ] Top-center STAGE indicator with the primary action for the current stage.
+  [ ] Decouple normalization from panning: add a "Clean up" command that runs
+      normalizeStroke on all UNLOCKED strokes at a user-set strength (slider 0–1),
+      rendered as a PREVIEW (ghost of the result) with Accept / Cancel.
+  [ ] Snapshot the graph to version history before applying (see Cluster J).
+  [ ] Make the viewport-driven ambient morph (Cluster F behavior) an OPTIONAL toggle,
+      OFF by default; the observation boundary overlay stays as its debug visual.
+  [ ] Remove Rationalism from scope (no mode selector, no rationalize.ts stub).
+  * Verification Goal: With ambient off, geometry never changes on pan. Clicking
+    "Clean up" previews fitted primitives and only commits on Accept; Cancel restores
+    the sketch exactly.
 
-CLUSTER H — Lock Pins & Radial Influence Fields
-  [ ] Shift+click on canvas (when toolMode === 'LOCK'): place Pin at world-space coords
-  [ ] Click existing pin: remove it
-  [ ] useLocks hook: per-vertex lockInfluence using influence_i = clamp(1 - d²/r², 0, 1);
-      multiple pins: totalInfluence = clamp(sum, 0, 1)
-  [ ] Wire totalInfluence into effectiveMag in Cluster F's mutation path
-  [ ] Render pins as soft glowing red rings using influence.frag shader (radial falloff)
-  [ ] Overlapping pin zones merge fields smoothly, no hard edges
-  [ ] Cursor: target/pin icon when toolMode === 'LOCK'
-  * Verification Goal: Pinned geometry retains its exact shape when moved off-screen.
-    Unpinned adjacent geometry still mutates normally. Glow rings are visible and
-    communicate the protected zone clearly.
+CLUSTER H — Lock / Approve Regions
+  [ ] Metaball pins: shift+click in 'LOCK' tool drops a pin; click a pin removes it.
+  [ ] Region lock: drag a rectangle/lasso to mark enclosed vertices as fully locked.
+  [ ] useLocks hook: per-vertex lockInfluence (pins: 1 - d²/r² summed/clamped; region: 1).
+  [ ] Wire lockInfluence into "Clean up" (skip/limit locked vertices).
+  [ ] Render locks clearly: glowing rings (influence.frag) for pins, a tint/outline for
+      region locks, so protected geometry is unmistakable.
+  * Verification Goal: Running "Clean up" leaves locked geometry untouched while
+    unlocked geometry normalizes. The protected area is visually obvious.
 
-CLUSTER I — Evolutionary Lineage Light-Table Reveal
-  [ ] useHistory hook: on each mutation animation completion, deep-clone graph →
-      push Snapshot to history array (cap at 200; drop oldest when exceeded)
-  [ ] "Reveal Evolution" toggle button in toolbar
-  [ ] When revealed: render all snapshots as stacked LineSegments layers simultaneously
-      with opacity = lerp(0.05, 1.0, index / total)  — oldest lightest, newest darkest
-  [ ] Active drawing layer renders at full opacity on top of all history layers
-  [ ] "Export Artwork" button: Three.js preserveDrawingBuffer canvas → PNG download
-  * Verification Goal: Toggling reveal shows a complex layered ghost map of the
-    drawing's full mutation history. The composite reads like stacked trace paper.
-    Export produces a clean high-resolution PNG of the composite.
+CLUSTER I — Generate (Hallucination): constraint-guided completion
+  [ ] api/hallucinate.ts: Vercel Edge Function proxying the Anthropic API (key server-side).
+  [ ] Serialize graph as { locked: segments[], open: segments[] } JSON.
+  [ ] Prompt the model to keep locked geometry exactly and extend/complete the unlocked
+      area (extend dangling segments, close implied enclosures, propose additions).
+  [ ] Parse returned segments → add as a NEW reviewable layer; animate in over 1–2s;
+      Accept merges into the graph, Reject discards. Snapshot to history before merge.
+  [ ] Strength/temperature control; graceful failure if the API errors (no crash).
+  * Verification Goal: With part of a sketch locked, Generate returns vector geometry
+    that respects the locked anchors, arrives as an accept/reject layer, and—on
+    accept—becomes ordinary editable strokes in the graph.
 
-CLUSTER J — Final Integration, Hotkeys & Production Rollout
-  [ ] Keyboard shortcuts: D = Draw, V = Pan/View, L = Lock Pin, E = Evolution reveal
-  [ ] Confirm Ctrl+Z undo still works end-to-end through the full graph pipeline
-  [ ] Tablet/stylus test: PointerEvent.pressure curves feel natural with Wacom input
-  [ ] Performance guard: if graph exceeds ~5000 edges, merge into batched instanced
-      buffer rendering
-  [ ] Vercel production deploy from GitHub main branch
-  [ ] Full smoke test: draw → pan away → observe normalization → lock a region →
-      verify locked area does not mutate → reveal evolution → export PNG → confirm
-      60 FPS throughout
-  * Verification Goal: The prototype runs at 60 FPS, accepts all hotkeys, and
-    executes the complete concept cycle cleanly. Public Vercel URL is live.
+CLUSTER J — Version History & Non-Destructive Iteration
+  [ ] useHistory hook: snapshot the graph before each transform (cap ~200; drop oldest).
+  [ ] Undo/redo across transforms; a "restore version" affordance.
+  [ ] Optional trace-paper overlay: stacked snapshots, opacity = lerp(0.05, 1, i/total).
+  * Verification Goal: Any normalize/generate can be reverted; the trace-paper view
+    shows the evolution; restoring a version reproduces that state exactly.
+
+CLUSTER K — Interop & Handoff (practical integration)
+  [ ] Import a PDF/image as a dimmed, non-editable underlay to sketch over.
+  [ ] Export the drawing as SVG and PDF (vector) and PNG (raster); DXF is a stretch goal.
+  [ ] (Anticipated, deferred) "set scale by reference" for real-world dimensions.
+  * Verification Goal: A user can trace over an imported plan and export clean vector
+    output that opens correctly in Bluebeam / a vector editor.
+
+CLUSTER L — Polish, Hotkeys & Production Rollout
+  [ ] Hotkeys: D = Draw, E = Erase, V = Pan, L = Lock; stage actions (e.g. Cmd+Enter
+      = run current stage's primary action); Ctrl+Z / Ctrl+Shift+Z undo/redo.
+  [ ] Tablet/stylus pressure feels natural; confirm Ctrl+Z across the full pipeline.
+  [ ] Performance guard: batch/instanced rendering if the graph exceeds ~5000 edges;
+      avoid full re-tessellation of every stroke on each transform frame.
+  [ ] Vercel production deploy from GitHub main.
+  [ ] Full smoke test: sketch → Clean up (accept) → lock a region → Generate (accept) →
+      undo back → export SVG → confirm 60 FPS throughout.
+  * Verification Goal: The prototype runs smoothly, the full sketch→normalize→lock→
+    generate→export loop works end to end, and the public Vercel URL is live.
 
 
 KEY DEPENDENCIES
@@ -311,8 +388,9 @@ three                  Three.js (peer dep for R3F)
 @react-three/drei      OrthographicCamera, Line, Html, and helper components
 zustand                Lightweight centralized state
 lucide-react           Icon set for toolbar UI
-@anthropic-ai/sdk      Hallucination mode — install when Cluster G stubs become full impl.
-                       API key must stay server-side via Vercel Edge Function
+@anthropic-ai/sdk      Generate stage (Cluster I) — API key must stay server-side via
+                       a Vercel Edge Function
+(future) svg/pdf libs  Export in Cluster K (e.g. a PDF writer); SVG can be hand-built
 
 
 OPEN QUESTIONS / DECISIONS TO REVISIT
@@ -323,8 +401,17 @@ OPEN QUESTIONS / DECISIONS TO REVISIT
   decide during Cluster A based on zoom-scaling behavior
 - Wacom full SDK (pressure curves, tilt): requires browser plugin; treat as an
   enhancement over the standard PointerEvent.pressure path already in Cluster B
-- DECAY_MAX_MS = 30 000 ms is a starting value; tune during Cluster F
-- History memory cap of 200 snapshots: revisit if export fidelity requires more states
-- Rationalism grid spacing: infer from stroke density vs. fixed user-defined grid —
-  decide when implementing that mode
+- History memory cap of ~200 snapshots: revisit if it limits iteration depth
+- RESOLVED: deliberate "Clean up" is the default; viewport auto-mutation is an optional
+  ambient toggle (off by default) — professional tools must not change geometry on pan
+- RESOLVED: "controlled diffusion" = LLM vector inpainting (locks = mask), not raster
+  generation — keeps output editable in the planar graph
+- Positioning: ideation front-end that feeds Bluebeam/CAD, not a markup/takeoff
+  replacement; interop (Cluster K) is what makes it fit a real workflow
+- Lock UX: metaball pins (signature) vs. rectangle/lasso region lock (predictable) —
+  ship both; watch which designers actually reach for
+- Generate trust: always accept/reject + snapshot; consider showing the LLM's additions
+  in a distinct color until accepted
+- Real-world scale/dimensions deferred; PDF underlay + "set scale by reference" is the
+  highest-value next step toward genuine planning use
 ================================================================================
