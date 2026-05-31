@@ -5,7 +5,6 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { ERASE_RADIUS_PX } from '../../hooks/useEraser'
 import { CameraControls } from './CameraControls'
 import { DrawingLayer } from './DrawingLayer'
-import { ViewportObserver } from './ViewportObserver'
 
 /**
  * Root R3F scene for Blindspot.
@@ -35,6 +34,7 @@ function useCanvasCursor(): string {
     if (isSpaceDown || toolMode === 'PAN') return 'grab'
     if (toolMode === 'DRAW') return 'crosshair'
     if (toolMode === 'ERASE') return ERASER_CURSOR
+    if (toolMode === 'SELECT') return 'crosshair'
     return 'default'
   }, [toolMode, isSpaceDown, isPanning])
 }
@@ -55,7 +55,6 @@ export function CanvasScene() {
 
         <CameraControls />
         <DrawingLayer />
-        <ViewportObserver />
       </Canvas>
     </div>
   )

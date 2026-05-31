@@ -5,11 +5,14 @@ import { useDrawingStore } from '../../store/drawingStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useDrawing } from '../../hooks/useDrawing'
 import { useEraser } from '../../hooks/useEraser'
+import { useSelection, type MarqueeRect } from '../../hooks/useSelection'
 import { resolveStrokePoints } from '../../geometry/graph'
 import type { Graph, SamplePoint, Stroke } from '../../types/geometry'
 import { buildRibbon, resampleCentripetalCatmullRom } from './strokeGeometry'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
+
+const SELECTION_COLOR = '#2f6fed'
 
 /** A smooth variable-width ribbon for a centerline polyline. */
 function RibbonMesh({ points, color }: { points: SamplePoint[]; color: string }) {
@@ -31,10 +34,27 @@ function RibbonMesh({ points, color }: { points: SamplePoint[]; color: string })
   )
 }
 
-/** Resolve a graph stroke to centerline points and render it. */
-function StrokeView({ graph, stroke }: { graph: Graph; stroke: Stroke }) {
+/** Resolve a graph stroke to centerline points and render it (tinted when selected). */
+function StrokeView({ graph, stroke, selected }: { graph: Graph; stroke: Stroke; selected: boolean }) {
   const points = useMemo(() => resolveStrokePoints(graph, stroke), [graph, stroke])
-  return <RibbonMesh points={points} color={stroke.color} />
+  return <RibbonMesh points={points} color={selected ? SELECTION_COLOR : stroke.color} />
+}
+
+/** Marquee selection rectangle overlay. */
+function MarqueeOverlay({ rect }: { rect: MarqueeRect }) {
+  const positions = useMemo(() => {
+    const { x0, y0, x1, y1 } = rect
+    return new Float32Array([x0, y0, 2, x1, y0, 2, x1, y1, 2, x0, y1, 2])
+  }, [rect])
+
+  return (
+    <lineLoop renderOrder={20}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+      </bufferGeometry>
+      <lineBasicMaterial color={SELECTION_COLOR} depthTest={false} />
+    </lineLoop>
+  )
 }
 
 /**
@@ -82,14 +102,20 @@ function InteractionPlane({
 export function DrawingLayer() {
   const graph = useDrawingStore((s) => s.graph)
   const toolMode = useDrawingStore((s) => s.toolMode)
+  const selectedStrokeIds = useDrawingStore((s) => s.selectedStrokeIds)
   const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
 
   const draw = useDrawing()
   const eraser = useEraser()
+  const selection = useSelection()
 
-  // Drawing/erasing is suspended while space is held (space = temporary pan).
-  const interactive = (toolMode === 'DRAW' || toolMode === 'ERASE') && !isSpaceDown
-  const handlers = toolMode === 'ERASE' ? eraser : draw
+  const selectedSet = useMemo(() => new Set(selectedStrokeIds), [selectedStrokeIds])
+
+  // Pointer routing per tool (suspended while space is held = temporary pan).
+  const interactive =
+    (toolMode === 'DRAW' || toolMode === 'ERASE' || toolMode === 'SELECT') && !isSpaceDown
+  const handlers =
+    toolMode === 'ERASE' ? eraser : toolMode === 'SELECT' ? selection : draw
 
   return (
     <>
@@ -100,9 +126,10 @@ export function DrawingLayer() {
         onPointerUp={handlers.onPointerUp}
       />
       {graph.strokes.map((stroke) => (
-        <StrokeView key={stroke.id} graph={graph} stroke={stroke} />
+        <StrokeView key={stroke.id} graph={graph} stroke={stroke} selected={selectedSet.has(stroke.id)} />
       ))}
       {draw.live && <RibbonMesh points={draw.live} color={draw.liveColor} />}
+      {selection.marquee && <MarqueeOverlay rect={selection.marquee} />}
     </>
   )
 }

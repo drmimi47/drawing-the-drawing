@@ -1,20 +1,20 @@
-import { Pencil, Eraser, Hand, MapPin } from 'lucide-react'
+import { Pencil, Eraser, BoxSelect, Hand } from 'lucide-react'
 import { useDrawingStore, type ToolMode } from '../../store/drawingStore'
 import './Toolbar.css'
 
 /**
- * Floating bottom-center tool dock (Cluster B).
+ * Floating bottom-center tool dock.
  *
  * Tools select the active interaction mode; the color swatches set the stroke
- * color. Pan (Cluster C) and Lock (Cluster H) are selectable now but only Draw
- * is wired to behavior so far.
+ * color. Select (marquee) feeds the right-click "Normalize" command. Lock/Intent
+ * tools arrive in Cluster H.
  */
 
 const TOOLS: { key: ToolMode; label: string; Icon: typeof Pencil }[] = [
   { key: 'DRAW', label: 'Draw', Icon: Pencil },
   { key: 'ERASE', label: 'Erase', Icon: Eraser },
+  { key: 'SELECT', label: 'Select', Icon: BoxSelect },
   { key: 'PAN', label: 'Pan', Icon: Hand },
-  { key: 'LOCK', label: 'Lock', Icon: MapPin },
 ]
 
 const PRESET_COLORS = ['#1a1a1a', '#e23b3b', '#2f6fed', '#1f9d55', '#e8852b']

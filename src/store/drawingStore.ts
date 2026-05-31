@@ -11,26 +11,30 @@ import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
  * crossings into shared vertices. Undo snapshots the whole graph.
  */
 
-export type ToolMode = 'DRAW' | 'ERASE' | 'PAN' | 'LOCK'
-export type MutationMode = 'NORMALIZATION' | 'RATIONALISM' | 'HALLUCINATION'
+export type ToolMode = 'DRAW' | 'ERASE' | 'PAN' | 'SELECT'
+export type Stage = 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
 
 const HISTORY_LIMIT = 100
 
 interface DrawingState {
   toolMode: ToolMode
-  mutationMode: MutationMode
+  stage: Stage
   strokeColor: string
   /** Nominal stroke width in world units (1 world unit = 1px at zoom 1). */
   baseWidth: number
   graph: Graph
+  /** IDs of strokes currently selected (for selection-scoped normalize). */
+  selectedStrokeIds: string[]
   /** Undo history: graph snapshots taken before each action. */
   past: Graph[]
 
   setTool: (tool: ToolMode) => void
-  setMutationMode: (mode: MutationMode) => void
+  setStage: (stage: Stage) => void
   setColor: (color: string) => void
   setBaseWidth: (width: number) => void
-  /** Move vertices (used to animate mutations); does not record undo history. */
+  setSelection: (ids: string[]) => void
+  clearSelection: () => void
+  /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
 
   /** Push the current graph onto the undo stack (call once at the start of an action). */
@@ -47,16 +51,24 @@ interface DrawingState {
 
 export const useDrawingStore = create<DrawingState>((set, get) => ({
   toolMode: 'DRAW',
-  mutationMode: 'NORMALIZATION',
+  stage: 'SKETCH',
   strokeColor: '#1a1a1a',
   baseWidth: 3.5,
   graph: emptyGraph(),
+  selectedStrokeIds: [],
   past: [],
 
-  setTool: (tool) => set({ toolMode: tool }),
-  setMutationMode: (mode) => set({ mutationMode: mode }),
+  setTool: (tool) =>
+    set((state) => ({
+      toolMode: tool,
+      // Leaving Select clears the highlight so it doesn't linger over other tools.
+      selectedStrokeIds: tool === 'SELECT' ? state.selectedStrokeIds : [],
+    })),
+  setStage: (stage) => set({ stage }),
   setColor: (color) => set({ strokeColor: color }),
   setBaseWidth: (width) => set({ baseWidth: width }),
+  setSelection: (ids) => set({ selectedStrokeIds: ids }),
+  clearSelection: () => set({ selectedStrokeIds: [] }),
   setVertexPositions: (updates) =>
     set((state) => {
       const vertices = { ...state.graph.vertices }

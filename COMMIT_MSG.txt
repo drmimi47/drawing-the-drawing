@@ -1,0 +1,19 @@
+Cluster G: selection-scoped Normalize; retire ambient pan-morph
+
+- Delete the ambient viewport-driven morph entirely (ViewportObserver + observerStore
+  + the debug toggle). Geometry no longer changes on pan/zoom.
+- Store: add stage (SKETCH/NORMALIZE/LOCK_INTENT/GENERATE) and a SELECT tool;
+  selection state (selectedStrokeIds); drop the old mutationMode. Switching away
+  from Select clears the selection highlight.
+- G2: marquee selection (useSelection) — drag a rectangle in Select mode to pick
+  strokes; overlay rectangle + blue highlight on selected strokes.
+- G3: normalization is now selection-scoped and explicit. Right-click with a
+  selection opens a "Normalize selection" menu; choosing it starts a non-destructive
+  preview with a strength slider (live morph toward fitted primitives), Apply to
+  commit, Cancel to revert. One undo step per session (snapshot before preview).
+- G1: top-center stage indicator (non-modal; sets stage + maps to the stage tool);
+  toolbar Lock placeholder replaced with Select.
+
+Build clean; graph/normalize/observer-util/erase suites pass.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

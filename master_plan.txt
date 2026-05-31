@@ -110,6 +110,8 @@ primitive fitting (line/H-V/circle/triangle/rectangle), unit-tested.
 Carry-over change: RETIRE the ambient pan-driven morph (done conceptually; remove/gate
 in Cluster G so geometry never changes on pan).
 
+*normalization is never global. it only can happen within lasso/marquee selection after user selects
+"normalize" after right clicking within lasso. 
 
 ================================================================================
 PHASE 1 — NON-LLM FOUNDATION  (build this now, in order)
@@ -119,11 +121,10 @@ CLUSTER G — Workflow orchestration + explicit "Clean up"
   G1 [ ] Stage state ('SKETCH'|'NORMALIZE'|'LOCK_INTENT'|'GENERATE') + top-center stage
          indicator surfacing the current stage's primary action. Non-modal.
   G2 [ ] Selection: marquee + lasso to select a set of strokes (selection state in store).
-  G3 [ ] "Clean up" command on UNLOCKED geometry (selection-scoped OR global), with a
-         strength slider, rendered as a ghost PREVIEW; Accept commits, Cancel restores.
-         Snapshot to history before commit. (Reuses existing normalizeStroke.)
-  G4 [ ] Retire ambient pan-morph: geometry must not change on pan/zoom. Keep the
-         observer/boundary only if reused later by an optional "cleanup lens".
+  G3 [ ] "Normalize" command on geometry (selection-scoped), with a
+         strength slider. uses existing normalizeStroke. 
+  G4 [ ] Retire ambient pan-morph: geometry must not change on pan/zoom *delete this code. user can trigger normalization by 
+  right clicking within the lasso/marquee to normalize the geometry inside only. 
   G5 [ ] (After G1–G4) Vector-control toggle: editable-vector mode to drag vertices.
   * Verify: pan never mutates geometry; Clean up previews and commits only on Accept;
     Cancel restores exactly; a selection limits the effect to chosen strokes.
