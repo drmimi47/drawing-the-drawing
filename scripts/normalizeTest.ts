@@ -1,10 +1,12 @@
 /**
- * Cluster F verification: Normalization snaps an edge's angle toward the nearest
- * 15° increment, scaled by magnitude, and honors anchored (observed) endpoints.
+ * Cluster F verification: stroke → primitive fitting.
+ *   - open near-horizontal line snaps to exact horizontal
+ *   - open slanted line becomes a straight (collinear) segment at its angle
+ *   - closed round stroke fits a circle (equal radii)
+ *   - closed square is left alone (not a supported primitive yet)
  * Run: npx tsx scripts/normalizeTest.ts
  */
-import { computeNormalizationTargets, type ReentryEvent } from '../src/geometry/mutations/normalize'
-import type { Graph } from '../src/types/geometry'
+import { normalizeStroke, type Pt } from '../src/geometry/mutations/normalize'
 
 let failures = 0
 function check(name: string, condition: boolean, detail = '') {
@@ -17,74 +19,69 @@ function check(name: string, condition: boolean, detail = '') {
 
 const deg = (r: number) => (r * 180) / Math.PI
 
-/** Build a one-edge graph from a to b. */
-function makeGraph(ax: number, ay: number, bx: number, by: number): Graph {
-  return {
-    vertices: {
-      a: { id: 'a', x: ax, y: ay },
-      b: { id: 'b', x: bx, y: by },
-    },
-    strokes: [{ id: 's', color: '#000', path: [{ v: 'a', w: 1 }, { v: 'b', w: 1 }] }],
+// 1. Rough near-horizontal line → snapped to exact horizontal (all y equal).
+{
+  const pts: Pt[] = [
+    { x: 0, y: 0 },
+    { x: 25, y: 2 },
+    { x: 50, y: -1.5 },
+    { x: 75, y: 1 },
+    { x: 100, y: -0.5 },
+  ]
+  const t = normalizeStroke(pts)!
+  const ys = t.map((p) => p.y)
+  const spread = Math.max(...ys) - Math.min(...ys)
+  check('near-horizontal snaps to exact horizontal', t !== null && spread < 1e-6, `y spread ${spread}`)
+}
+
+// 2. Clean 30° open line → stays straight at ~30°.
+{
+  const k = Math.tan((30 * Math.PI) / 180)
+  const pts: Pt[] = [0, 20, 40, 60, 80].map((x) => ({ x, y: k * x }))
+  const t = normalizeStroke(pts)!
+  const ang = deg(Math.atan2(t[t.length - 1].y - t[0].y, t[t.length - 1].x - t[0].x))
+  // collinearity: cross product of (t1-t0) and (t2-t0) ≈ 0
+  const cross =
+    (t[2].x - t[0].x) * (t[4].y - t[0].y) - (t[2].y - t[0].y) * (t[4].x - t[0].x)
+  check('30° line stays ~30°', Math.abs(ang - 30) < 0.5, `got ${ang.toFixed(2)}°`)
+  check('30° line becomes collinear', Math.abs(cross) < 1e-6, `cross ${cross}`)
+}
+
+// 3. Closed round stroke → fitted circle (equal radii about the centroid).
+{
+  const cx = 10
+  const cy = 20
+  const R = 50
+  const pts: Pt[] = []
+  for (let i = 0; i < 24; i++) {
+    const a = (i / 24) * Math.PI * 2
+    pts.push({ x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) })
+  }
+  pts.push({ ...pts[0] }) // close it
+  const t = normalizeStroke(pts)
+  check('closed round stroke is fitted', t !== null)
+  if (t) {
+    // Exact circle input ⇒ fit recovers the true center; check radii about it.
+    const radii = t.map((p) => Math.hypot(p.x - cx, p.y - cy))
+    const spread = Math.max(...radii) - Math.min(...radii)
+    check('fitted circle has equal radii', spread < 1e-3, `radius spread ${spread}`)
   }
 }
 
-function angleOf(p: { x: number; y: number }, q: { x: number; y: number }) {
-  return Math.atan2(q.y - p.y, q.x - p.x)
-}
-
-const ev: ReentryEvent[] = [{ v0: 'a', v1: 'b', magnitude: 1 }]
-
-// A line ~5° off horizontal, full magnitude → should snap to ~0°.
+// 4. Closed square → not a supported primitive yet → null (left alone).
 {
-  const g = makeGraph(0, 0, 100, Math.tan((5 * Math.PI) / 180) * 100)
-  const targets = computeNormalizationTargets(g, ev, () => true)
-  const a = targets['a'] ?? g.vertices.a
-  const b = targets['b'] ?? g.vertices.b
-  const ang = Math.abs(deg(angleOf(a, b)))
-  check('5° line snaps toward 0°', ang < 0.5, `got ${ang.toFixed(2)}°`)
+  const pts: Pt[] = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 10, y: 10 },
+    { x: 0, y: 10 },
+    { x: 0, y: 0 },
+  ]
+  check('closed square is left alone', normalizeStroke(pts) === null)
 }
 
-// A line ~20° (near 15° increment) → should snap to ~15°.
-{
-  const g = makeGraph(0, 0, 100, Math.tan((20 * Math.PI) / 180) * 100)
-  const targets = computeNormalizationTargets(g, ev, () => true)
-  const a = targets['a'] ?? g.vertices.a
-  const b = targets['b'] ?? g.vertices.b
-  const ang = deg(angleOf(a, b))
-  check('20° line snaps toward 15°', Math.abs(ang - 15) < 0.5, `got ${ang.toFixed(2)}°`)
-}
-
-// Half magnitude on a 6° line → should move halfway toward 0° (~3°).
-{
-  const g = makeGraph(0, 0, 100, Math.tan((6 * Math.PI) / 180) * 100)
-  const targets = computeNormalizationTargets(g, [{ v0: 'a', v1: 'b', magnitude: 0.5 }], () => true)
-  const a = targets['a'] ?? g.vertices.a
-  const b = targets['b'] ?? g.vertices.b
-  const ang = Math.abs(deg(angleOf(a, b)))
-  check('half magnitude moves halfway (~3°)', Math.abs(ang - 3) < 0.5, `got ${ang.toFixed(2)}°`)
-}
-
-// Anchored endpoint: 'a' is observed (not mutable) → a stays put, b swings.
-{
-  const g = makeGraph(0, 0, 100, Math.tan((5 * Math.PI) / 180) * 100)
-  const targets = computeNormalizationTargets(g, ev, (id) => id === 'b')
-  check('anchored endpoint a is not moved', targets['a'] === undefined)
-  const a = g.vertices.a
-  const b = targets['b'] ?? g.vertices.b
-  const ang = Math.abs(deg(angleOf(a, b)))
-  check('swinging about anchor still snaps to ~0°', ang < 0.5, `got ${ang.toFixed(2)}°`)
-}
-
-// Length is preserved by the rotation (about midpoint).
-{
-  const g = makeGraph(0, 0, 100, Math.tan((5 * Math.PI) / 180) * 100)
-  const origLen = Math.hypot(g.vertices.b.x - g.vertices.a.x, g.vertices.b.y - g.vertices.a.y)
-  const targets = computeNormalizationTargets(g, ev, () => true)
-  const a = targets['a']!
-  const b = targets['b']!
-  const newLen = Math.hypot(b.x - a.x, b.y - a.y)
-  check('edge length preserved', Math.abs(newLen - origLen) < 1e-6, `${origLen} vs ${newLen}`)
-}
+// 5. Tiny stroke → null.
+check('tiny stroke is left alone', normalizeStroke([{ x: 0, y: 0 }, { x: 1, y: 0 }]) === null)
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`)
 process.exit(failures === 0 ? 0 : 1)

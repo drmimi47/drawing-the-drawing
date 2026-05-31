@@ -4,46 +4,38 @@ import * as THREE from 'three'
 import type { OrthographicCamera } from 'three'
 import { useDrawingStore } from '../../store/drawingStore'
 import { useObserverStore } from '../../store/observerStore'
-import { deriveEdges } from '../../geometry/graph'
-import {
-  computeNormalizationTargets,
-  DECAY_MAX_MS,
-  type ReentryEvent,
-} from '../../geometry/mutations/normalize'
+import { normalizeStroke, DECAY_MAX_MS, type Pt } from '../../geometry/mutations/normalize'
 import {
   computeViewportAABB,
   insetAABB,
   segmentIntersectsAABB,
   type ViewportAABB,
 } from '../../utils/viewport'
-import type { Graph } from '../../types/geometry'
 
 /**
  * Viewport observer + mutation driver (Clusters E & F).
  *
- * Each time the camera or graph changes, edges are classified against the
- * observation boundary (viewport inset by a margin). Per-edge time-outside is
- * tracked; when an edge re-enters, Normalization snaps its angle toward the
- * nearest 15° increment scaled by that time, and the affected vertices animate
- * to their new positions over ~500ms. The boundary + at-risk edges are drawn as
- * a debug overlay.
+ * Each frame, every stroke is classified against the observation boundary
+ * (viewport inset by a margin). While a stroke is entirely outside (unobserved),
+ * it morphs CONTINUOUSLY toward its normalized primitive — fraction
+ * clamp(timeOutside / DECAY_MAX_MS, 0, 1) — so the longer it stays out, the more
+ * it normalizes. When it re-enters it freezes ("what is watched stays fixed"); a
+ * later exit re-fits from the now-cleaner shape, so normalization is progressive.
+ *
+ * The boundary rectangle and the unobserved (morphing) strokes are drawn as a
+ * debug overlay.
  */
 
 const OVERLAY_Z = 1
-const REENTRY_MIN_MS = 200 // ignore brief flickers
-const ANIM_MS = 500
 
-interface EdgeTiming {
-  outside: boolean
-  exitedAt: number
-}
-
-interface VertexAnim {
-  fromX: number
-  fromY: number
-  toX: number
-  toY: number
-  start: number
+interface StrokeMutation {
+  observed: boolean
+  tLeft: number
+  done: boolean
+  /** Positions to morph FROM, with the vertex id each maps to. */
+  baseline: { vid: string; x: number; y: number }[]
+  /** Positions to morph TO (aligned with baseline), or null when nothing to do. */
+  target: Pt[] | null
 }
 
 function aabbChanged(a: ViewportAABB | null, b: ViewportAABB): boolean {
@@ -57,19 +49,15 @@ function aabbChanged(a: ViewportAABB | null, b: ViewportAABB): boolean {
   )
 }
 
-function pointInAABB(x: number, y: number, a: ViewportAABB): boolean {
-  return x >= a.minX && x <= a.maxX && y >= a.minY && y <= a.maxY
-}
-
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3)
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 
 export function ViewportObserver() {
-  const timing = useRef<Map<string, EdgeTiming>>(new Map())
-  const anims = useRef<Map<string, VertexAnim>>(new Map())
+  const states = useRef<Map<string, StrokeMutation>>(new Map())
   const lastObs = useRef<ViewportAABB | null>(null)
-  const lastGraph = useRef<Graph | null>(null)
+  const lastGraph = useRef<ReturnType<typeof useDrawingStore.getState>['graph'] | null>(null)
+  const idle = useRef(false)
 
   const boundary = useMemo(() => {
     const g = new THREE.BufferGeometry()
@@ -93,99 +81,96 @@ export function ViewportObserver() {
 
   useFrame((state) => {
     const cam = state.camera as OrthographicCamera
-    const setVertexPositions = useDrawingStore.getState().setVertexPositions
+    const store = useDrawingStore.getState()
+    const { debug, marginPx } = useObserverStore.getState()
 
-    // 1. Advance in-flight vertex animations.
-    if (anims.current.size > 0) {
-      const now = performance.now()
-      const updates: Record<string, { x: number; y: number }> = {}
-      for (const [id, a] of anims.current) {
-        const t = Math.min(1, (now - a.start) / ANIM_MS)
-        const e = easeOutCubic(t)
-        updates[id] = { x: a.fromX + (a.toX - a.fromX) * e, y: a.fromY + (a.toY - a.fromY) * e }
-        if (t >= 1) anims.current.delete(id)
-      }
-      setVertexPositions(updates)
-    }
-
-    // 2. Classify edges against the observation boundary (on change only).
     const viewport = computeViewportAABB(cam)
     if (!viewport) return
-    const { debug, marginPx } = useObserverStore.getState()
     const obs = insetAABB(viewport, marginPx / cam.zoom)
-
     boundary.visible = debug
     atRisk.visible = debug
 
-    const graph = useDrawingStore.getState().graph
+    const graph = store.graph
     const moved = aabbChanged(lastObs.current, obs)
     const graphChanged = graph !== lastGraph.current
-    if (!moved && !graphChanged) return
+    if (!moved && !graphChanged && idle.current) return
     lastObs.current = obs
     lastGraph.current = graph
 
-    const mutationMode = useDrawingStore.getState().mutationMode
+    const mode = store.mutationMode
     const now = performance.now()
+    const updates: Record<string, { x: number; y: number }> = {}
+    const overlay: number[] = []
     const seen = new Set<string>()
-    const reentries: ReentryEvent[] = []
-    const positions: number[] = []
+    let activeMorph = false
 
-    for (const edge of deriveEdges(graph)) {
-      const a = graph.vertices[edge.v0]
-      const b = graph.vertices[edge.v1]
-      if (!a || !b) continue
-      seen.add(edge.id)
+    for (const stroke of graph.strokes) {
+      seen.add(stroke.id)
+      const pts: Pt[] = stroke.path.map((pp) => {
+        const v = graph.vertices[pp.v]
+        return { x: v.x, y: v.y }
+      })
+      if (pts.length < 2) continue
 
-      const outside = !segmentIntersectsAABB(a.x, a.y, b.x, b.y, obs)
-      const prev = timing.current.get(edge.id)
-
-      if (outside) {
-        if (!prev || !prev.outside) timing.current.set(edge.id, { outside: true, exitedAt: now })
-        positions.push(a.x, a.y, OVERLAY_Z, b.x, b.y, OVERLAY_Z)
-      } else {
-        if (prev && prev.outside) {
-          const dt = now - prev.exitedAt
-          if (dt >= REENTRY_MIN_MS) {
-            const magnitude = Math.min(1, dt / DECAY_MAX_MS)
-            reentries.push({ v0: edge.v0, v1: edge.v1, magnitude })
-          }
+      let observed = false
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (segmentIntersectsAABB(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, obs)) {
+          observed = true
+          break
         }
-        timing.current.set(edge.id, { outside: false, exitedAt: 0 })
+      }
+
+      let st = states.current.get(stroke.id)
+
+      if (observed) {
+        // Freeze: keep whatever it morphed to; ready to re-fit on next exit.
+        states.current.set(stroke.id, { observed: true, tLeft: 0, done: false, baseline: [], target: null })
+        continue
+      }
+
+      // Unobserved.
+      if (!st || st.observed) {
+        const baseline = stroke.path.map((pp, i) => ({ vid: pp.v, x: pts[i].x, y: pts[i].y }))
+        const target = mode === 'NORMALIZATION' ? normalizeStroke(pts) : null
+        st = { observed: false, tLeft: now, done: false, baseline, target }
+        states.current.set(stroke.id, st)
+      }
+
+      for (let i = 0; i < pts.length - 1; i++) {
+        overlay.push(pts[i].x, pts[i].y, OVERLAY_Z, pts[i + 1].x, pts[i + 1].y, OVERLAY_Z)
+      }
+
+      if (mode === 'NORMALIZATION' && st.target && !st.done) {
+        const raw = Math.min(1, (now - st.tLeft) / DECAY_MAX_MS)
+        const m = easeInOutCubic(raw)
+        for (let i = 0; i < st.baseline.length; i++) {
+          const base = st.baseline[i]
+          const tgt = st.target[i]
+          updates[base.vid] = { x: base.x + (tgt.x - base.x) * m, y: base.y + (tgt.y - base.y) * m }
+        }
+        if (raw >= 1) st.done = true
+        else activeMorph = true
       }
     }
 
-    for (const key of [...timing.current.keys()]) {
-      if (!seen.has(key)) timing.current.delete(key)
+    for (const key of [...states.current.keys()]) {
+      if (!seen.has(key)) states.current.delete(key)
     }
 
-    // Boundary rectangle corners.
-    const bp = boundary.geometry.getAttribute('position') as THREE.BufferAttribute
-    bp.setXYZ(0, obs.minX, obs.minY, OVERLAY_Z)
-    bp.setXYZ(1, obs.maxX, obs.minY, OVERLAY_Z)
-    bp.setXYZ(2, obs.maxX, obs.maxY, OVERLAY_Z)
-    bp.setXYZ(3, obs.minX, obs.maxY, OVERLAY_Z)
-    bp.needsUpdate = true
-    atRisk.geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-
-    // 3. Apply Normalization to re-entering edges.
-    if (reentries.length > 0 && mutationMode === 'NORMALIZATION') {
-      const isMutable = (vid: string) => {
-        const v = graph.vertices[vid]
-        return v ? !pointInAABB(v.x, v.y, obs) : false
-      }
-      const targets = computeNormalizationTargets(graph, reentries, isMutable)
-      for (const id in targets) {
-        const v = graph.vertices[id]
-        if (!v) continue
-        anims.current.set(id, {
-          fromX: v.x,
-          fromY: v.y,
-          toX: targets[id].x,
-          toY: targets[id].y,
-          start: now,
-        })
-      }
+    if (debug) {
+      const bp = boundary.geometry.getAttribute('position') as THREE.BufferAttribute
+      bp.setXYZ(0, obs.minX, obs.minY, OVERLAY_Z)
+      bp.setXYZ(1, obs.maxX, obs.minY, OVERLAY_Z)
+      bp.setXYZ(2, obs.maxX, obs.maxY, OVERLAY_Z)
+      bp.setXYZ(3, obs.minX, obs.maxY, OVERLAY_Z)
+      bp.needsUpdate = true
+      atRisk.geometry.setAttribute('position', new THREE.Float32BufferAttribute(overlay, 3))
     }
+
+    if (Object.keys(updates).length > 0) store.setVertexPositions(updates)
+
+    // Idle when nothing is actively morphing — lets the early-out skip work.
+    idle.current = !activeMorph
   })
 
   return (
