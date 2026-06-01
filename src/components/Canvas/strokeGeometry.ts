@@ -105,20 +105,58 @@ export function buildRibbon(points: SamplePoint[]): {
   const pos: number[] = []
   const idx: number[] = []
 
-  // Two strip vertices (left, right) per centerline point.
+  // Two strip vertices (left, right) per centerline point. Offsets use a proper
+  // MITER join (bisector scaled by 1/cos(half-angle)) so thickness stays constant
+  // through corners instead of pinching; clamped to avoid spikes at sharp angles.
+  const MITER_LIMIT = 4
   for (let i = 0; i < n; i++) {
-    const prev = points[Math.max(0, i - 1)]
-    const next = points[Math.min(n - 1, i + 1)]
-    let dx = next.x - prev.x
-    let dy = next.y - prev.y
-    const len = Math.hypot(dx, dy) || 1
-    dx /= len
-    dy /= len
-    const nx = -dy
-    const ny = dx
-    const hw = points[i].w
-    pos.push(points[i].x + nx * hw, points[i].y + ny * hw, 0) // left  = 2i
-    pos.push(points[i].x - nx * hw, points[i].y - ny * hw, 0) // right = 2i+1
+    const cur = points[i]
+
+    // Incoming / outgoing unit directions (fall back to the single edge at ends).
+    let inx = cur.x - points[Math.max(0, i - 1)].x
+    let iny = cur.y - points[Math.max(0, i - 1)].y
+    let outx = points[Math.min(n - 1, i + 1)].x - cur.x
+    let outy = points[Math.min(n - 1, i + 1)].y - cur.y
+    const inLen = Math.hypot(inx, iny)
+    const outLen = Math.hypot(outx, outy)
+    if (inLen < 1e-9) {
+      inx = outx
+      iny = outy
+    } else {
+      inx /= inLen
+      iny /= inLen
+    }
+    if (outLen < 1e-9) {
+      outx = inx
+      outy = iny
+    } else {
+      outx /= outLen
+      outy /= outLen
+    }
+
+    // Edge normals (left side), then the miter (bisector) direction.
+    const ninx = -iny
+    const niny = inx
+    const noutx = -outy
+    const nouty = outx
+    let mx = ninx + noutx
+    let my = niny + nouty
+    const mlen = Math.hypot(mx, my)
+    if (mlen < 1e-6) {
+      mx = ninx
+      my = niny
+    } else {
+      mx /= mlen
+      my /= mlen
+    }
+    const cosHalf = mx * ninx + my * niny
+    const scale = Math.min(MITER_LIMIT, cosHalf > 1e-3 ? 1 / cosHalf : MITER_LIMIT)
+
+    const hw = cur.w
+    const ox = mx * hw * scale
+    const oy = my * hw * scale
+    pos.push(cur.x + ox, cur.y + oy, 0) // left  = 2i
+    pos.push(cur.x - ox, cur.y - oy, 0) // right = 2i+1
   }
 
   for (let i = 0; i < n - 1; i++) {

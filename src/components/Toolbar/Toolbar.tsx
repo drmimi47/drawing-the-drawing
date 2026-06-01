@@ -30,6 +30,7 @@ export function Toolbar() {
   const setTool = useDrawingStore((s) => s.setTool)
   const strokeColor = useDrawingStore((s) => s.strokeColor)
   const setColor = useDrawingStore((s) => s.setColor)
+  const setShowIntentLabels = useDrawingStore((s) => s.setShowIntentLabels)
 
   return (
     <div className="toolbar-dock" role="toolbar" aria-label="Tools">
@@ -42,6 +43,9 @@ export function Toolbar() {
           aria-label={label}
           aria-pressed={toolMode === key}
           onClick={() => setTool(key)}
+          // Hovering the Intent-pin button reveals every pin's type label.
+          onMouseEnter={key === 'INTENT_PIN' ? () => setShowIntentLabels(true) : undefined}
+          onMouseLeave={key === 'INTENT_PIN' ? () => setShowIntentLabels(false) : undefined}
         >
           <Icon size={20} strokeWidth={1.75} />
         </button>

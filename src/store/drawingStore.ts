@@ -93,6 +93,8 @@ interface DrawingState {
   textLabels: TextLabel[]
   /** Transient text being placed/edited, or null. */
   pendingText: PendingText | null
+  /** When true, every pin shows its intent-type label (driven by toolbar hover). */
+  showIntentLabels: boolean
   /** Undo/redo stacks: snapshots of graph + locks + pins before each action. */
   past: HistoryEntry[]
   future: HistoryEntry[]
@@ -121,6 +123,7 @@ interface DrawingState {
   beginText: (x: number, y: number, screenX: number, screenY: number, id: string | null, initial: string) => void
   commitText: (value: string) => void
   cancelText: () => void
+  setShowIntentLabels: (show: boolean) => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
 
@@ -151,6 +154,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   pendingPin: null,
   textLabels: [],
   pendingText: null,
+  showIntentLabels: false,
   past: [],
   future: [],
 
@@ -291,6 +295,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       }
     }),
   cancelText: () => set({ pendingText: null }),
+  setShowIntentLabels: (show) => set({ showIntentLabels: show }),
   setVertexPositions: (updates) =>
     set((state) => {
       const vertices = { ...state.graph.vertices }

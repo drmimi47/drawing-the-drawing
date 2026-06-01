@@ -242,20 +242,17 @@ body {
   box-shadow: var(--panel-shadow);
 }
 
-/* Type label shown when hovering an intent pin. */
-.intent-hover-label {
-  transform: translateY(-26px);
-  padding: 3px 8px;
-  font-size: 11px;
-  font-weight: 600;
+/* Intent-pin type labels (shown above each pin when hovering the pin tool). */
+.intent-pin-label {
+  transform: translateY(-24px);
+  font-size: 12px;
+  font-weight: 700;
   white-space: nowrap;
-  color: var(--ink);
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-bottom-width: 2px;
-  border-radius: 8px;
-  box-shadow: var(--panel-shadow);
   user-select: none;
+  /* Light halo for legibility over geometry — not a bubble. */
+  text-shadow:
+    0 1px 2px rgba(255, 255, 255, 0.9),
+    0 0 2px rgba(255, 255, 255, 0.9);
 }
 
 /* Hint shown while sizing an intent pin's radius. */

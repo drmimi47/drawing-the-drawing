@@ -1,13 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { INTENT_META, type IntentPin } from '../../types/geometry'
-import type { PendingPin } from '../../store/drawingStore'
+import { useDrawingStore, type PendingPin } from '../../store/drawingStore'
 
 /**
  * Intent-pin visualization (Cluster H, H6). Each pin emits a soft color-coded
- * radial field plus a constant-size CIRCLE marker. Hovering a pin shows its
- * intent type label above it. The pending pin renders live while sizing.
+ * radial field plus a constant-size CIRCLE marker. Hovering the toolbar's Intent
+ * pin button reveals every pin's type label (plain colored text) above its
+ * circle. The pending pin renders live while sizing.
  */
 
 const FIELD_Z = -0.4
@@ -52,33 +53,13 @@ function getCircleTexture(): THREE.CanvasTexture {
   return circleTexture
 }
 
-function IntentField({
-  x,
-  y,
-  radius,
-  color,
-  onOver,
-  onOut,
-}: {
-  x: number
-  y: number
-  radius: number
-  color: string
-  onOver?: () => void
-  onOut?: () => void
-}) {
+function IntentField({ x, y, radius, color }: { x: number; y: number; radius: number; color: string }) {
   const uniforms = useMemo(
     () => ({ uColor: { value: new THREE.Color(color) }, uMaxAlpha: { value: MAX_ALPHA } }),
     [color],
   )
   return (
-    <mesh
-      position={[x, y, FIELD_Z]}
-      renderOrder={-1}
-      raycast={onOver ? undefined : () => null}
-      onPointerOver={onOver}
-      onPointerOut={onOut}
-    >
+    <mesh position={[x, y, FIELD_Z]} renderOrder={-1} raycast={() => null}>
       <planeGeometry args={[radius * 2, radius * 2]} />
       <shaderMaterial
         vertexShader={vertexShader}
@@ -142,21 +123,12 @@ function PinMarkers({ pins, pending }: { pins: IntentPin[]; pending: PendingPin 
 }
 
 export function IntentFieldView({ pins, pending }: { pins: IntentPin[]; pending: PendingPin | null }) {
-  const [hovered, setHovered] = useState<string | null>(null)
-  const hoveredPin = hovered ? pins.find((p) => p.id === hovered) ?? null : null
+  const showLabels = useDrawingStore((s) => s.showIntentLabels)
 
   return (
     <>
       {pins.map((p) => (
-        <IntentField
-          key={p.id}
-          x={p.x}
-          y={p.y}
-          radius={p.radius}
-          color={INTENT_META[p.intentType].color}
-          onOver={() => setHovered(p.id)}
-          onOut={() => setHovered((h) => (h === p.id ? null : h))}
-        />
+        <IntentField key={p.id} x={p.x} y={p.y} radius={p.radius} color={INTENT_META[p.intentType].color} />
       ))}
 
       {pending && pending.phase === 'radius' && pending.intentType && (
@@ -170,13 +142,14 @@ export function IntentFieldView({ pins, pending }: { pins: IntentPin[]; pending:
 
       <PinMarkers pins={pins} pending={pending} />
 
-      {hoveredPin && (
-        <Html position={[hoveredPin.x, hoveredPin.y, 1]} center pointerEvents="none" zIndexRange={[8, 0]}>
-          <div className="intent-hover-label" style={{ borderColor: INTENT_META[hoveredPin.intentType].color }}>
-            {INTENT_META[hoveredPin.intentType].label}
-          </div>
-        </Html>
-      )}
+      {showLabels &&
+        pins.map((p) => (
+          <Html key={'lbl-' + p.id} position={[p.x, p.y, 1]} center pointerEvents="none" zIndexRange={[8, 0]}>
+            <div className="intent-pin-label" style={{ color: INTENT_META[p.intentType].color }}>
+              {INTENT_META[p.intentType].label}
+            </div>
+          </Html>
+        ))}
     </>
   )
 }
