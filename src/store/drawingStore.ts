@@ -21,6 +21,12 @@ let lockCounter = 0
 
 const HISTORY_LIMIT = 100
 
+/** One undo/redo step: a snapshot of everything that an action can change. */
+interface HistoryEntry {
+  graph: Graph
+  lockPolygons: LockPolygon[]
+}
+
 interface DrawingState {
   toolMode: ToolMode
   stage: Stage
@@ -32,8 +38,9 @@ interface DrawingState {
   selectedStrokeIds: string[]
   /** Geometric lock regions (feathered) that gate normalize/generate. */
   lockPolygons: LockPolygon[]
-  /** Undo history: graph snapshots taken before each action. */
-  past: Graph[]
+  /** Undo/redo stacks: snapshots of graph + locks before each action. */
+  past: HistoryEntry[]
+  future: HistoryEntry[]
 
   setTool: (tool: ToolMode) => void
   setStage: (stage: Stage) => void
@@ -47,7 +54,7 @@ interface DrawingState {
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
 
-  /** Push the current graph onto the undo stack (call once at the start of an action). */
+  /** Snapshot current state onto the undo stack (call once at the start of an action). */
   beginHistory: () => void
   /** Replace the graph without touching history (used mid-action, e.g. erasing). */
   setGraph: (graph: Graph) => void
@@ -56,6 +63,9 @@ interface DrawingState {
   /** Erase along the swept capsule (caller manages history for the drag). */
   eraseCapsule: (ax: number, ay: number, bx: number, by: number, r: number) => boolean
   undo: () => void
+  redo: () => void
+  /** Pop the last snapshot WITHOUT creating a redo step (used to cancel a preview). */
+  revertHistory: () => void
   clear: () => void
 }
 
@@ -68,6 +78,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   selectedStrokeIds: [],
   lockPolygons: [],
   past: [],
+  future: [],
 
   setTool: (tool) =>
     set((state) => ({
@@ -82,10 +93,22 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   clearSelection: () => set({ selectedStrokeIds: [] }),
   addLock: (lock) =>
     set((state) => ({
+      past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+      future: [],
       lockPolygons: [...state.lockPolygons, { ...lock, id: `lock-${Date.now()}-${lockCounter++}` }],
     })),
-  removeLock: (id) => set((state) => ({ lockPolygons: state.lockPolygons.filter((l) => l.id !== id) })),
-  clearLocks: () => set({ lockPolygons: [] }),
+  removeLock: (id) =>
+    set((state) => ({
+      past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+      future: [],
+      lockPolygons: state.lockPolygons.filter((l) => l.id !== id),
+    })),
+  clearLocks: () =>
+    set((state) => ({
+      past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+      future: [],
+      lockPolygons: [],
+    })),
   setVertexPositions: (updates) =>
     set((state) => {
       const vertices = { ...state.graph.vertices }
@@ -96,11 +119,13 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       return { graph: { vertices, strokes: state.graph.strokes } }
     }),
 
-  beginHistory: () => set((state) => ({ past: [...state.past, state.graph].slice(-HISTORY_LIMIT) })),
+  beginHistory: () =>
+    set((state) => ({ past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT), future: [] })),
   setGraph: (graph) => set({ graph }),
   commitStroke: (points, color, raw) =>
     set((state) => ({
-      past: [...state.past, state.graph].slice(-HISTORY_LIMIT),
+      past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+      future: [],
       graph: addStrokeToGraph(state.graph, points, color, raw),
     })),
   eraseCapsule: (ax, ay, bx, by, r) => {
@@ -115,7 +140,40 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       if (state.past.length === 0) return {}
       const past = state.past.slice()
       const previous = past.pop()!
-      return { graph: previous, past }
+      return {
+        graph: previous.graph,
+        lockPolygons: previous.lockPolygons,
+        past,
+        future: [...state.future, snapshot(state)].slice(-HISTORY_LIMIT),
+      }
     }),
-  clear: () => set((state) => ({ past: [...state.past, state.graph].slice(-HISTORY_LIMIT), graph: emptyGraph() })),
+  redo: () =>
+    set((state) => {
+      if (state.future.length === 0) return {}
+      const future = state.future.slice()
+      const next = future.pop()!
+      return {
+        graph: next.graph,
+        lockPolygons: next.lockPolygons,
+        future,
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+      }
+    }),
+  revertHistory: () =>
+    set((state) => {
+      if (state.past.length === 0) return {}
+      const past = state.past.slice()
+      const previous = past.pop()!
+      return { graph: previous.graph, lockPolygons: previous.lockPolygons, past }
+    }),
+  clear: () =>
+    set((state) => ({
+      past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+      future: [],
+      graph: emptyGraph(),
+    })),
 }))
+
+function snapshot(state: { graph: Graph; lockPolygons: LockPolygon[] }): HistoryEntry {
+  return { graph: state.graph, lockPolygons: state.lockPolygons }
+}

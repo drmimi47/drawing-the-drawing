@@ -6,12 +6,18 @@ import { NormalizeMenu } from './components/Toolbar/NormalizeMenu'
 import { useDrawingStore } from './store/drawingStore'
 
 export default function App() {
-  // Ctrl/Cmd+Z = undo across the graph pipeline (draw / erase / normalize).
+  // Undo (Ctrl/Cmd+Z) and redo (Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y) across the whole
+  // pipeline — draw, erase, normalize, and lock add/remove.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      if (!(e.ctrlKey || e.metaKey)) return
+      const key = e.key.toLowerCase()
+      if (key === 'z' && !e.shiftKey) {
         e.preventDefault()
         useDrawingStore.getState().undo()
+      } else if ((key === 'z' && e.shiftKey) || key === 'y') {
+        e.preventDefault()
+        useDrawingStore.getState().redo()
       }
     }
     window.addEventListener('keydown', onKeyDown)

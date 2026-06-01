@@ -60,7 +60,7 @@ export function NormalizeMenu() {
   )
 
   const cancelSession = useCallback(() => {
-    useDrawingStore.getState().undo() // restore original graph + pop the snapshot
+    useDrawingStore.getState().revertHistory() // restore original; no redo step for a cancel
     setSession(null)
   }, [])
 

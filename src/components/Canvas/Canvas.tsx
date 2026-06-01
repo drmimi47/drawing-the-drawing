@@ -49,7 +49,7 @@ export function CanvasScene() {
       <Canvas
         orthographic
         camera={{ position: [0, 0, 100], zoom: 1, near: 0.1, far: 1000 }}
-        gl={{ antialias: true, preserveDrawingBuffer: true }}
+        gl={{ antialias: true, preserveDrawingBuffer: true, stencil: true }}
         dpr={[1, 2]}
       >
         {/* Plain white workspace. */}

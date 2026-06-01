@@ -1,72 +1,64 @@
 import { useMemo } from 'react'
 import * as THREE from 'three'
 import type { LockPolygon } from '../../types/geometry'
-import { buildRibbon } from './strokeGeometry'
 
 /**
- * Lock-region visualization (Cluster H, H4). Communicates the hard + feathered
- * zones without a per-pixel distance-field shader:
- *   - hard fill   : translucent filled polygon (frozen core)
- *   - feather halo : a soft band of width featherRadius hugging the boundary
- *   - border       : a crisp outline
+ * Lock-region visualization (Cluster H, H4 — simplified).
+ *
+ * A flat transparent-red infill of the lock regions. Overlapping locks JOIN into
+ * one uniform region (no darker intersection) using the stencil buffer: each
+ * polygon writes 1 into the stencil (color off), then a single translucent quad
+ * fills wherever the stencil is set — so each unioned pixel is painted exactly
+ * once. The fill sits behind strokes (depth-tested at z = -0.5).
  */
 
 const LOCK_COLOR = '#e23b3b'
+const FILL_OPACITY = 0.2
+const STENCIL_REF = 1
 
-function LockField({ poly }: { poly: LockPolygon }) {
+function LockMask({ poly }: { poly: LockPolygon }) {
   const shape = useMemo(
     () => new THREE.Shape(poly.points.map((p) => new THREE.Vector2(p.x, p.y))),
     [poly.points],
   )
-
-  const border = useMemo(() => {
-    const a = new Float32Array(poly.points.length * 3)
-    poly.points.forEach((p, i) => {
-      a[i * 3] = p.x
-      a[i * 3 + 1] = p.y
-      a[i * 3 + 2] = 0.5
-    })
-    return a
-  }, [poly.points])
-
-  // Soft halo: a ribbon centered on the boundary, half-width = featherRadius,
-  // so it spans featherRadius inward and outward (the negotiation zone).
-  const feather = useMemo(() => {
-    const loop = [...poly.points, poly.points[0]].map((p) => ({ x: p.x, y: p.y, w: poly.featherRadius }))
-    return buildRibbon(loop)
-  }, [poly.points, poly.featherRadius])
-
   return (
-    <group>
-      {feather.positions && feather.indices && (
-        <mesh raycast={() => null} renderOrder={0}>
-          <bufferGeometry>
-            <bufferAttribute attach="attributes-position" args={[feather.positions, 3]} />
-            <bufferAttribute attach="index" args={[feather.indices, 1]} />
-          </bufferGeometry>
-          <meshBasicMaterial color={LOCK_COLOR} transparent opacity={0.1} depthWrite={false} />
-        </mesh>
-      )}
-      <mesh position={[0, 0, -0.5]} raycast={() => null} renderOrder={0}>
-        <shapeGeometry args={[shape]} />
-        <meshBasicMaterial color={LOCK_COLOR} transparent opacity={0.16} depthWrite={false} />
-      </mesh>
-      <lineLoop raycast={() => null} renderOrder={2}>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[border, 3]} />
-        </bufferGeometry>
-        <lineBasicMaterial color={LOCK_COLOR} transparent opacity={0.85} depthTest={false} />
-      </lineLoop>
-    </group>
+    <mesh raycast={() => null} renderOrder={-3}>
+      <shapeGeometry args={[shape]} />
+      <meshBasicMaterial
+        colorWrite={false}
+        depthWrite={false}
+        depthTest={false}
+        stencilWrite
+        stencilRef={STENCIL_REF}
+        stencilFunc={THREE.AlwaysStencilFunc}
+        stencilZPass={THREE.ReplaceStencilOp}
+      />
+    </mesh>
   )
 }
 
 export function LockFieldView({ locks }: { locks: LockPolygon[] }) {
+  if (locks.length === 0) return null
+
   return (
-    <>
+    <group>
       {locks.map((poly) => (
-        <LockField key={poly.id} poly={poly} />
+        <LockMask key={poly.id} poly={poly} />
       ))}
-    </>
+
+      {/* Single translucent fill, clipped to the unioned stencil mask. */}
+      <mesh position={[0, 0, -0.5]} raycast={() => null} renderOrder={-2}>
+        <planeGeometry args={[1_000_000, 1_000_000]} />
+        <meshBasicMaterial
+          color={LOCK_COLOR}
+          transparent
+          opacity={FILL_OPACITY}
+          depthWrite={false}
+          stencilWrite
+          stencilRef={STENCIL_REF}
+          stencilFunc={THREE.EqualStencilFunc}
+        />
+      </mesh>
+    </group>
   )
 }
