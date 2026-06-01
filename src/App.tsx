@@ -26,17 +26,27 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  const toolbarPosition = useDrawingStore((s) => s.toolbarPosition)
+
   return (
-    <div className="app">
-      <CanvasScene />
-
-      <div className="status-bar">
-        <span className="status-dot" />
-        DYNAMIC TRACE PAPER
-      </div>
-
-      <StageIndicator />
+    // Flex layout: the docked toolbar takes one edge, the canvas area fills the
+    // rest. Toolbar is the first child; flex-direction (set per dock side in CSS)
+    // places it on the chosen edge.
+    <div className="app" data-dock={toolbarPosition}>
       <Toolbar />
+
+      <main className="canvas-area">
+        <CanvasScene />
+
+        {/* Overlays live inside the canvas area, so they never sit under the dock. */}
+        <div className="status-bar">
+          <span className="status-dot" />
+          DYNAMIC TRACE PAPER
+        </div>
+        <StageIndicator />
+      </main>
+
+      {/* Fixed-position menus (anchored to click coordinates). */}
       <NormalizeMenu />
       <IntentPinMenu />
       <TextEditor />

@@ -39,12 +39,35 @@ body {
   touch-action: none;
 }
 
-/* ---- App layout ---- */
+/* ---- App layout (dockable toolbar) ---- */
 .app {
-  position: relative;
+  display: flex;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+}
+
+/* Toolbar is always the first child; flex-direction places it on the chosen edge
+   and the canvas area fills the remaining space. */
+.app[data-dock='top'] {
+  flex-direction: column;
+}
+.app[data-dock='bottom'] {
+  flex-direction: column-reverse;
+}
+.app[data-dock='left'] {
+  flex-direction: row;
+}
+.app[data-dock='right'] {
+  flex-direction: row-reverse;
+}
+
+/* The canvas area takes all remaining space; overlays anchor to it. */
+.canvas-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 
 .canvas-layer {
@@ -302,4 +325,69 @@ body {
 
 .btn-primary:hover {
   background: #245fd0;
+}
+
+/* ---- Dock-position control (on the toolbar) ---- */
+.dock-control {
+  position: relative;
+  display: inline-flex;
+}
+
+.dock-menu {
+  position: absolute;
+  z-index: 40;
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+}
+
+/* Open the picker toward the canvas, away from the docked edge. */
+.dock-control[data-dock='bottom'] .dock-menu {
+  bottom: calc(100% + 5px);
+  left: 50%;
+  transform: translateX(-50%);
+  flex-direction: row;
+}
+.dock-control[data-dock='top'] .dock-menu {
+  top: calc(100% + 5px);
+  left: 50%;
+  transform: translateX(-50%);
+  flex-direction: row;
+}
+.dock-control[data-dock='left'] .dock-menu {
+  left: calc(100% + 5px);
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+}
+.dock-control[data-dock='right'] .dock-menu {
+  right: calc(100% + 5px);
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+}
+
+.dock-menu-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.dock-menu-item:hover {
+  background: var(--hover);
+}
+
+.dock-menu-item.is-active {
+  background: var(--accent);
+  color: #fff;
 }

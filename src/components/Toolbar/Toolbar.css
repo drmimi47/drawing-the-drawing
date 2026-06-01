@@ -1,19 +1,24 @@
+/* Docked strip: a flex item that spans its edge; the canvas fills the rest. */
 .toolbar-dock {
-  position: absolute;
-  bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
   z-index: 10;
-
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 1px;
-  padding: 3px;
+  padding: 4px;
 
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 0;
   box-shadow: var(--panel-shadow);
+}
+
+.toolbar-dock--horizontal {
+  flex-direction: row;
+}
+
+.toolbar-dock--vertical {
+  flex-direction: column;
 }
 
 .tool-button {
@@ -69,11 +74,23 @@
   background: var(--panel-border);
 }
 
+/* In a vertical dock, dividers run horizontally and groups stack in a column. */
+.toolbar-dock--vertical .toolbar-divider {
+  width: auto;
+  height: 1px;
+  margin: 3px 3px;
+}
+
 .swatches {
   display: flex;
   align-items: center;
   gap: 3px;
   padding: 0 3px;
+}
+
+.toolbar-dock--vertical .swatches {
+  flex-direction: column;
+  padding: 3px 0;
 }
 
 .swatch {

@@ -1,13 +1,29 @@
-import { Pencil, Spline, Type, Eraser, BoxSelect, Lasso, MousePointer2, Lock, MapPin, Hand } from 'lucide-react'
-import { useDrawingStore, type ToolMode } from '../../store/drawingStore'
+import { useEffect, useState } from 'react'
+import {
+  Pencil,
+  Spline,
+  Type,
+  Eraser,
+  BoxSelect,
+  Lasso,
+  MousePointer2,
+  Lock,
+  MapPin,
+  Hand,
+  LayoutGrid,
+  PanelTop,
+  PanelRight,
+  PanelBottom,
+  PanelLeft,
+} from 'lucide-react'
+import { useDrawingStore, type ToolMode, type ToolbarPosition } from '../../store/drawingStore'
 import './Toolbar.css'
 
 /**
- * Floating bottom-center tool dock.
- *
- * Tools select the active interaction mode; the color swatches set the stroke
- * color. Select (marquee) and Lasso (freehand) feed the right-click "Normalize"
- * command. Vector edits anchor points directly. Lock/Intent tools arrive in Cluster H.
+ * Dockable tool dock. Tools select the active interaction mode; the color
+ * swatches set the stroke color. The dock can live on any edge (top/right/
+ * bottom/left) — orientation follows the side, and a dock control on the bar
+ * lets the user pick the side.
  */
 
 const TOOLS: { key: ToolMode; label: string; Icon: typeof Pencil }[] = [
@@ -25,15 +41,76 @@ const TOOLS: { key: ToolMode; label: string; Icon: typeof Pencil }[] = [
 
 const PRESET_COLORS = ['#1a1a1a', '#e23b3b', '#2f6fed', '#1f9d55', '#e8852b']
 
+const DOCK_OPTIONS: { key: ToolbarPosition; label: string; Icon: typeof PanelTop }[] = [
+  { key: 'top', label: 'Dock top', Icon: PanelTop },
+  { key: 'right', label: 'Dock right', Icon: PanelRight },
+  { key: 'bottom', label: 'Dock bottom', Icon: PanelBottom },
+  { key: 'left', label: 'Dock left', Icon: PanelLeft },
+]
+
+/** Settings button + popover to choose which edge the toolbar docks to. */
+function DockControl() {
+  const position = useDrawingStore((s) => s.toolbarPosition)
+  const setPosition = useDrawingStore((s) => s.setToolbarPosition)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    window.addEventListener('pointerdown', close)
+    return () => window.removeEventListener('pointerdown', close)
+  }, [open])
+
+  return (
+    <div className="dock-control" data-dock={position} onPointerDown={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        className="tool-button"
+        title="Dock position"
+        aria-label="Dock position"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <LayoutGrid size={18} strokeWidth={1.75} />
+      </button>
+      {open && (
+        <div className="dock-menu" role="menu">
+          {DOCK_OPTIONS.map(({ key, label, Icon }) => (
+            <button
+              key={key}
+              type="button"
+              className={`dock-menu-item${position === key ? ' is-active' : ''}`}
+              title={label}
+              aria-label={label}
+              onClick={() => {
+                setPosition(key)
+                setOpen(false)
+              }}
+            >
+              <Icon size={16} strokeWidth={1.75} />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Toolbar() {
   const toolMode = useDrawingStore((s) => s.toolMode)
   const setTool = useDrawingStore((s) => s.setTool)
   const strokeColor = useDrawingStore((s) => s.strokeColor)
   const setColor = useDrawingStore((s) => s.setColor)
   const setShowIntentLabels = useDrawingStore((s) => s.setShowIntentLabels)
+  const toolbarPosition = useDrawingStore((s) => s.toolbarPosition)
+
+  const vertical = toolbarPosition === 'left' || toolbarPosition === 'right'
 
   return (
-    <div className="toolbar-dock" role="toolbar" aria-label="Tools">
+    <div
+      className={`toolbar-dock ${vertical ? 'toolbar-dock--vertical' : 'toolbar-dock--horizontal'}`}
+      role="toolbar"
+      aria-label="Tools"
+    >
       {TOOLS.map(({ key, label, Icon }) => (
         <button
           key={key}
@@ -76,6 +153,10 @@ export function Toolbar() {
           />
         </label>
       </div>
+
+      <div className="toolbar-divider" />
+
+      <DockControl />
     </div>
   )
 }

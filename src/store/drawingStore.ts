@@ -33,6 +33,7 @@ export type ToolMode =
   | 'INTENT_PIN'
   | 'TEXT'
 export type Stage = 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
+export type ToolbarPosition = 'top' | 'right' | 'bottom' | 'left'
 
 /** Tools that maintain (rather than clear) the current selection. */
 const SELECTION_TOOLS = new Set<ToolMode>(['SELECT', 'LASSO'])
@@ -95,6 +96,8 @@ interface DrawingState {
   pendingText: PendingText | null
   /** When true, every pin shows its intent-type label (driven by toolbar hover). */
   showIntentLabels: boolean
+  /** Which edge the main tool dock is docked to. */
+  toolbarPosition: ToolbarPosition
   /** Undo/redo stacks: snapshots of graph + locks + pins before each action. */
   past: HistoryEntry[]
   future: HistoryEntry[]
@@ -126,6 +129,7 @@ interface DrawingState {
   /** Move a text label (used by the Edit tool drag); no undo history per move. */
   moveText: (id: string, x: number, y: number) => void
   setShowIntentLabels: (show: boolean) => void
+  setToolbarPosition: (position: ToolbarPosition) => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
 
@@ -157,6 +161,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   textLabels: [],
   pendingText: null,
   showIntentLabels: false,
+  toolbarPosition: 'bottom',
   past: [],
   future: [],
 
@@ -300,6 +305,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   moveText: (id, x, y) =>
     set((state) => ({ textLabels: state.textLabels.map((l) => (l.id === id ? { ...l, x, y } : l)) })),
   setShowIntentLabels: (show) => set({ showIntentLabels: show }),
+  setToolbarPosition: (position) => set({ toolbarPosition: position }),
   setVertexPositions: (updates) =>
     set((state) => {
       const vertices = { ...state.graph.vertices }
