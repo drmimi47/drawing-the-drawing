@@ -196,7 +196,7 @@ export function eraseGraphCapsule(
         vertices[id] = { id, x: sp.x, y: sp.y }
         return { v: id, w: sp.w }
       })
-      strokes.push({ id: newId('s'), color: stroke.color, path })
+      strokes.push({ id: newId('s'), color: stroke.color, path, straight: stroke.straight })
     }
   }
 

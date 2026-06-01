@@ -51,6 +51,18 @@
   cursor: default;
 }
 
+/* The Edit tool is a manipulation (not creation) tool — set it apart. */
+.tool-button--edit {
+  color: #2f6fed;
+  box-shadow: inset 0 0 0 1.5px rgba(47, 111, 237, 0.35);
+}
+
+.tool-button--edit.is-active {
+  background: #2f6fed;
+  color: #fff;
+  box-shadow: none;
+}
+
 .toolbar-divider {
   width: 1px;
   align-self: stretch;

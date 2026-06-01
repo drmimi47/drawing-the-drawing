@@ -192,3 +192,106 @@ export function buildRibbon(points: SamplePoint[]): {
 
   return { positions: new Float32Array(pos), indices: new Uint32Array(idx) }
 }
+
+const POLYLINE_MITER_LIMIT = 4
+
+/**
+ * Build a TRUE vertex-to-vertex polyline ribbon: each segment is an independent
+ * rectangle of the given thickness, and interior vertices get a miter join
+ * (sharp corners; bevel fallback past the miter limit). No smoothing, no shared
+ * miter strip, so corners stay sharp and never pinch. Butt caps at the ends.
+ */
+export function buildPolylineRibbon(points: SamplePoint[]): {
+  positions: Float32Array | null
+  indices: Uint32Array | null
+} {
+  const n = points.length
+  if (n < 2) return { positions: null, indices: null }
+
+  const pos: number[] = []
+  const idx: number[] = []
+
+  const addTri = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number) => {
+    const base = pos.length / 3
+    pos.push(ax, ay, 0, bx, by, 0, cx, cy, 0)
+    idx.push(base, base + 1, base + 2)
+  }
+
+  // Per-segment rectangles (offset each end along that segment's own normal).
+  for (let i = 0; i < n - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+    let dx = b.x - a.x
+    let dy = b.y - a.y
+    const len = Math.hypot(dx, dy)
+    if (len < 1e-9) continue
+    dx /= len
+    dy /= len
+    const nx = -dy
+    const ny = dx
+    const a0x = a.x + nx * a.w
+    const a0y = a.y + ny * a.w
+    const a1x = a.x - nx * a.w
+    const a1y = a.y - ny * a.w
+    const b0x = b.x + nx * b.w
+    const b0y = b.y + ny * b.w
+    const b1x = b.x - nx * b.w
+    const b1y = b.y - ny * b.w
+    addTri(a0x, a0y, b0x, b0y, a1x, a1y)
+    addTri(b0x, b0y, b1x, b1y, a1x, a1y)
+  }
+
+  // Miter (or bevel) fill at each interior vertex to close the outer wedge.
+  for (let i = 1; i < n - 1; i++) {
+    const p = points[i]
+    let pdx = p.x - points[i - 1].x
+    let pdy = p.y - points[i - 1].y
+    let l = Math.hypot(pdx, pdy)
+    if (l < 1e-9) continue
+    pdx /= l
+    pdy /= l
+    let ndx = points[i + 1].x - p.x
+    let ndy = points[i + 1].y - p.y
+    l = Math.hypot(ndx, ndy)
+    if (l < 1e-9) continue
+    ndx /= l
+    ndy /= l
+
+    const cross = pdx * ndy - pdy * ndx
+    if (Math.abs(cross) < 1e-4) continue // collinear — segments already align
+    const hw = p.w
+    const sign = cross > 0 ? -1 : 1 // outward normal sign
+
+    const npx = -pdy * sign
+    const npy = pdx * sign
+    const nnx = -ndy * sign
+    const nny = ndx * sign
+    const oPx = p.x + npx * hw
+    const oPy = p.y + npy * hw
+    const oNx = p.x + nnx * hw
+    const oNy = p.y + nny * hw
+
+    let mx = npx + nnx
+    let my = npy + nny
+    const ml = Math.hypot(mx, my)
+    if (ml < 1e-6) {
+      addTri(p.x, p.y, oPx, oPy, oNx, oNy) // ~180° reversal → bevel
+      continue
+    }
+    mx /= ml
+    my /= ml
+    const cosHalf = mx * npx + my * npy
+    const miterLen = cosHalf > 1e-3 ? hw / cosHalf : hw * POLYLINE_MITER_LIMIT
+
+    if (miterLen > hw * POLYLINE_MITER_LIMIT) {
+      addTri(p.x, p.y, oPx, oPy, oNx, oNy) // bevel
+    } else {
+      const mPx = p.x + mx * miterLen
+      const mPy = p.y + my * miterLen
+      addTri(p.x, p.y, oPx, oPy, mPx, mPy)
+      addTri(p.x, p.y, mPx, mPy, oNx, oNy)
+    }
+  }
+
+  return { positions: new Float32Array(pos), indices: new Uint32Array(idx) }
+}

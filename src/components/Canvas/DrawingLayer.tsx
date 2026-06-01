@@ -13,7 +13,7 @@ import { usePolyline } from '../../hooks/usePolyline'
 import { useTextTool } from '../../hooks/useTextTool'
 import { resolveStrokePoints } from '../../geometry/graph'
 import type { Graph, SamplePoint, Stroke } from '../../types/geometry'
-import { buildRibbon, resampleCentripetalCatmullRom } from './strokeGeometry'
+import { buildRibbon, buildPolylineRibbon, resampleCentripetalCatmullRom } from './strokeGeometry'
 import { MarchingAntsLine } from './MarchingAntsLine'
 import { LockFieldView } from './LockFieldView'
 import { IntentFieldView } from './IntentFieldView'
@@ -25,10 +25,10 @@ const SELECTION_COLOR = '#2f6fed'
 
 /** A variable-width ribbon for a centerline polyline (smoothed unless `straight`). */
 function RibbonMesh({ points, color, straight }: { points: SamplePoint[]; color: string; straight?: boolean }) {
-  const geometry = useMemo(() => {
-    const centerline = straight ? points : resampleCentripetalCatmullRom(points)
-    return buildRibbon(centerline)
-  }, [points, straight])
+  const geometry = useMemo(
+    () => (straight ? buildPolylineRibbon(points) : buildRibbon(resampleCentripetalCatmullRom(points))),
+    [points, straight],
+  )
 
   if (!geometry.positions || !geometry.indices) return null
 

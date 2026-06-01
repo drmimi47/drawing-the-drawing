@@ -123,6 +123,8 @@ interface DrawingState {
   beginText: (x: number, y: number, screenX: number, screenY: number, id: string | null, initial: string) => void
   commitText: (value: string) => void
   cancelText: () => void
+  /** Move a text label (used by the Edit tool drag); no undo history per move. */
+  moveText: (id: string, x: number, y: number) => void
   setShowIntentLabels: (show: boolean) => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
@@ -295,6 +297,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       }
     }),
   cancelText: () => set({ pendingText: null }),
+  moveText: (id, x, y) =>
+    set((state) => ({ textLabels: state.textLabels.map((l) => (l.id === id ? { ...l, x, y } : l)) })),
   setShowIntentLabels: (show) => set({ showIntentLabels: show }),
   setVertexPositions: (updates) =>
     set((state) => {

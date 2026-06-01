@@ -1,4 +1,4 @@
-import { Pencil, Spline, Type, Eraser, BoxSelect, Lasso, PenTool, Lock, MapPin, Hand } from 'lucide-react'
+import { Pencil, Spline, Type, Eraser, BoxSelect, Lasso, MousePointer2, Lock, MapPin, Hand } from 'lucide-react'
 import { useDrawingStore, type ToolMode } from '../../store/drawingStore'
 import './Toolbar.css'
 
@@ -17,7 +17,7 @@ const TOOLS: { key: ToolMode; label: string; Icon: typeof Pencil }[] = [
   { key: 'ERASE', label: 'Erase', Icon: Eraser },
   { key: 'SELECT', label: 'Marquee select', Icon: BoxSelect },
   { key: 'LASSO', label: 'Lasso select', Icon: Lasso },
-  { key: 'VECTOR', label: 'Vector edit', Icon: PenTool },
+  { key: 'VECTOR', label: 'Edit', Icon: MousePointer2 },
   { key: 'LASSO_LOCK', label: 'Lock region', Icon: Lock },
   { key: 'INTENT_PIN', label: 'Intent pin', Icon: MapPin },
   { key: 'PAN', label: 'Pan', Icon: Hand },
@@ -38,7 +38,7 @@ export function Toolbar() {
         <button
           key={key}
           type="button"
-          className={`tool-button${toolMode === key ? ' is-active' : ''}`}
+          className={`tool-button${key === 'VECTOR' ? ' tool-button--edit' : ''}${toolMode === key ? ' is-active' : ''}`}
           title={label}
           aria-label={label}
           aria-pressed={toolMode === key}
