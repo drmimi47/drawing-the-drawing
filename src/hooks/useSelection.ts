@@ -29,19 +29,6 @@ function rectCorners(ax: number, ay: number, bx: number, by: number) {
   ]
 }
 
-function pointInPolygon(x: number, y: number, poly: { x: number; y: number }[]): boolean {
-  let inside = false
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i].x
-    const yi = poly[i].y
-    const xj = poly[j].x
-    const yj = poly[j].y
-    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi
-    if (intersect) inside = !inside
-  }
-  return inside
-}
-
 export function useSelection() {
   const clearSelection = useDrawingStore((s) => s.clearSelection)
   const selectedCount = useDrawingStore((s) => s.selectedStrokeIds.length)
@@ -97,38 +84,28 @@ export function useSelection() {
     if (!activeRef.current) return
     activeRef.current = false
 
-    const graph = useDrawingStore.getState().graph
-    const ids: string[] = []
+    const store = useDrawingStore.getState()
 
     if (modeRef.current === 'lasso') {
-      const poly = ptsRef.current
-      if (poly.length >= 3) {
-        for (const stroke of graph.strokes) {
-          const hit = stroke.path.some((pp) => {
-            const v = graph.vertices[pp.v]
-            return v && pointInPolygon(v.x, v.y, poly)
-          })
-          if (hit) ids.push(stroke.id)
-        }
+      if (ptsRef.current.length >= 3) store.applyLassoSelection(ptsRef.current)
+      else {
+        store.clearSelection()
+        setOutline(null)
       }
-    } else {
-      const minX = Math.min(startRef.current.x, endRef.current.x)
-      const maxX = Math.max(startRef.current.x, endRef.current.x)
-      const minY = Math.min(startRef.current.y, endRef.current.y)
-      const maxY = Math.max(startRef.current.y, endRef.current.y)
-      if (maxX - minX >= 1e-3 || maxY - minY >= 1e-3) {
-        for (const stroke of graph.strokes) {
-          const hit = stroke.path.some((pp) => {
-            const v = graph.vertices[pp.v]
-            return v && v.x >= minX && v.x <= maxX && v.y >= minY && v.y <= maxY
-          })
-          if (hit) ids.push(stroke.id)
-        }
-      }
+      return
     }
 
-    if (ids.length > 0) useDrawingStore.getState().setSelection(ids)
-    else setOutline(null)
+    const minX = Math.min(startRef.current.x, endRef.current.x)
+    const maxX = Math.max(startRef.current.x, endRef.current.x)
+    const minY = Math.min(startRef.current.y, endRef.current.y)
+    const maxY = Math.max(startRef.current.y, endRef.current.y)
+    if (maxX - minX < 1e-3 && maxY - minY < 1e-3) {
+      store.clearSelection()
+      setOutline(null)
+      return
+    }
+    // Segment + select against the rectangle as a polygon.
+    store.applyLassoSelection(rectCorners(minX, minY, maxX, maxY))
   }, [])
 
   // Drop the persistent outline when the selection is cleared elsewhere

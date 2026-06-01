@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import type { Graph, LockPolygon, RawSample, SamplePoint } from '../types/geometry'
 import { emptyGraph } from '../types/geometry'
 import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
+import { segmentStrokesByPolygon } from '../geometry/clip'
+import { simplifyRDP } from '../geometry/simplify'
 
 /**
  * Central canvas + tool state (Cluster D).
@@ -48,7 +50,11 @@ interface DrawingState {
   setBaseWidth: (width: number) => void
   setSelection: (ids: string[]) => void
   clearSelection: () => void
+  /** Segment strokes at the region boundary and select the enclosed pieces. */
+  applyLassoSelection: (region: { x: number; y: number }[]) => void
   addLock: (lock: Omit<LockPolygon, 'id'>) => void
+  /** Segment strokes at the lock boundary, then add the lock (one undo step). */
+  addLockRegion: (points: { x: number; y: number }[], featherRadius: number) => void
   removeLock: (id: string) => void
   clearLocks: () => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
@@ -91,12 +97,45 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   setBaseWidth: (width) => set({ baseWidth: width }),
   setSelection: (ids) => set({ selectedStrokeIds: ids }),
   clearSelection: () => set({ selectedStrokeIds: [] }),
+  applyLassoSelection: (region) => {
+    const poly = simplifyRDP(region, 2)
+    if (poly.length < 3) {
+      set({ selectedStrokeIds: [] })
+      return
+    }
+    set((state) => {
+      const { graph, insideStrokeIds, changed } = segmentStrokesByPolygon(state.graph, poly)
+      if (!changed) return { selectedStrokeIds: insideStrokeIds }
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        graph,
+        selectedStrokeIds: insideStrokeIds,
+      }
+    })
+  },
   addLock: (lock) =>
     set((state) => ({
       past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
       future: [],
       lockPolygons: [...state.lockPolygons, { ...lock, id: `lock-${Date.now()}-${lockCounter++}` }],
     })),
+  addLockRegion: (points, featherRadius) => {
+    const poly = simplifyRDP(points, 2)
+    if (poly.length < 3) return
+    set((state) => {
+      const seg = segmentStrokesByPolygon(state.graph, poly)
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        graph: seg.changed ? seg.graph : state.graph,
+        lockPolygons: [
+          ...state.lockPolygons,
+          { points: poly, featherRadius, id: `lock-${Date.now()}-${lockCounter++}` },
+        ],
+      }
+    })
+  },
   removeLock: (id) =>
     set((state) => ({
       past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),

@@ -10,7 +10,7 @@ import { clipPolylineCapsule } from './erase'
  */
 
 let idCounter = 0
-function newId(prefix: string): string {
+export function newId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${(idCounter++).toString(36)}`
 }
 

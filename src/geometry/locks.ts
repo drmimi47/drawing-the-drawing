@@ -1,15 +1,17 @@
 import type { Graph, LockPolygon } from '../types/geometry'
 
 /**
- * Lock-field math (Cluster H). A lock polygon freezes geometry inside it
- * (influence 1.0) and feathers outward to 0 across its featherRadius. Multiple
- * locks combine by taking the maximum influence (strongest wins).
+ * Lock-field math (Cluster H). Influence is an INTERIOR distance field: a lock
+ * polygon is hard-locked (1.0) deep in its core and feathers DOWN to 0 as it
+ * approaches the boundary — the negotiation zone. Outside the polygon influence
+ * is 0. `featherRadius` is the width of the edge falloff band; cores deeper than
+ * that saturate at 1.0. Multiple locks combine by taking the maximum (union).
  *
- * Influence gates "Clean up": a vertex's normalize strength is scaled by
- * (1 - influence), so influence-1 vertices never move.
+ * The same field drives both the visual gradient and "Clean up": a vertex's
+ * normalize strength is scaled by (1 - influence).
  */
 
-export const DEFAULT_FEATHER_RADIUS = 40 // world units
+export const DEFAULT_FEATHER_RADIUS = 60 // width (world units) of the edge falloff band
 
 type Pt = { x: number; y: number }
 
@@ -45,14 +47,14 @@ export function distanceToPolygonBoundary(x: number, y: number, poly: Pt[]): num
   return best
 }
 
-/** Influence (0..1) of a single lock polygon at a point. */
+/** Interior distance-field influence (0..1) of a single lock polygon at a point. */
 function polygonInfluence(x: number, y: number, poly: LockPolygon): number {
   if (poly.points.length < 3) return 0
-  if (pointInPolygon(x, y, poly.points)) return 1
-  if (poly.featherRadius <= 0) return 0
+  if (!pointInPolygon(x, y, poly.points)) return 0 // outside ⇒ free
+  if (poly.featherRadius <= 0) return 1
+  // Distance inward from the boundary: 0 at the edge → 1.0 once past featherRadius.
   const d = distanceToPolygonBoundary(x, y, poly.points)
-  if (d >= poly.featherRadius) return 0
-  return 1 - d / poly.featherRadius
+  return Math.min(d / poly.featherRadius, 1)
 }
 
 /** Combined lock influence (0..1) at a point across all lock polygons. */

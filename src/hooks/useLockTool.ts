@@ -60,7 +60,7 @@ export function useLockTool() {
       return
     }
 
-    store.addLock({ points: pts, featherRadius: DEFAULT_FEATHER_RADIUS })
+    store.addLockRegion(pts, DEFAULT_FEATHER_RADIUS)
   }, [])
 
   return { outline, onPointerDown, onPointerMove, onPointerUp }
