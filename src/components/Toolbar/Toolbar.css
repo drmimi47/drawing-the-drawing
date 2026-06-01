@@ -1,64 +1,63 @@
 .toolbar-dock {
   position: absolute;
-  bottom: 24px;
+  bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
 
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px;
+  gap: 1px;
+  padding: 3px;
 
   background: var(--panel);
   border: 1px solid var(--panel-border);
-  border-radius: 14px;
+  border-radius: 0;
   box-shadow: var(--panel-shadow);
-  backdrop-filter: blur(8px);
 }
 
 .tool-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
 
   border: none;
-  border-radius: 10px;
+  border-radius: 0;
   background: transparent;
-  color: var(--ink);
+  color: var(--text);
   cursor: pointer;
 
-  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .tool-button:hover:not(:disabled) {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--hover);
 }
 
 .tool-button:active:not(:disabled) {
-  transform: scale(0.94);
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .tool-button.is-active {
-  background: var(--ink);
+  background: var(--accent);
   color: #fff;
 }
 
 .tool-button:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: default;
 }
 
 /* The Edit tool is a manipulation (not creation) tool — set it apart. */
 .tool-button--edit {
-  color: #2f6fed;
-  box-shadow: inset 0 0 0 1.5px rgba(47, 111, 237, 0.35);
+  color: #6ea0ff;
+  box-shadow: inset 0 0 0 1px rgba(47, 111, 237, 0.55);
 }
 
 .tool-button--edit.is-active {
-  background: #2f6fed;
+  background: var(--accent);
   color: #fff;
   box-shadow: none;
 }
@@ -66,35 +65,35 @@
 .toolbar-divider {
   width: 1px;
   align-self: stretch;
-  margin: 4px 4px;
+  margin: 3px 3px;
   background: var(--panel-border);
 }
 
 .swatches {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 4px;
+  gap: 3px;
+  padding: 0 3px;
 }
 
 .swatch {
   position: relative;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
-  border: 2px solid rgba(0, 0, 0, 0.12);
-  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  border-radius: 0;
   cursor: pointer;
   overflow: hidden;
-  transition: transform 120ms ease, box-shadow 120ms ease;
+  transition: box-shadow 120ms ease;
 }
 
 .swatch:hover {
-  transform: scale(1.12);
+  border-color: var(--text-dim);
 }
 
 .swatch.is-active {
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--ink);
+  box-shadow: inset 0 0 0 1px var(--panel), 0 0 0 1.5px var(--accent);
 }
 
 .swatch-custom {
@@ -102,10 +101,10 @@
   align-items: center;
   justify-content: center;
   background: conic-gradient(red, orange, yellow, green, blue, violet, red);
-  border-color: rgba(0, 0, 0, 0.12);
+  border-color: var(--panel-border);
 }
 
-/* Hide the native color input; the label circle is the visible control. */
+/* Hide the native color input; the label square is the visible control. */
 .swatch-custom input[type='color'] {
   position: absolute;
   inset: 0;
