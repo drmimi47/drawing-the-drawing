@@ -38,6 +38,20 @@ export interface PathPoint {
   w: number
 }
 
+/**
+ * Drafting line style (Cluster 3, improvements C3). Hierarchical line formatting
+ * for professional markup — heavy solid for parcels, dashed for setbacks, etc.
+ */
+export type LineStyle = 'solid' | 'dashed' | 'long-dash' | 'dotted'
+
+/** Lineweight presets in world units (full width). 1 world unit = 1px @ zoom 1. */
+export const LINEWEIGHTS: { label: string; width: number }[] = [
+  { label: 'Fine', width: 1 },
+  { label: 'Standard', width: 2 },
+  { label: 'Bold', width: 4 },
+  { label: 'Thick', width: 6 },
+]
+
 /** A stroke: an ordered path through shared vertices, plus retained raw input. */
 export interface Stroke {
   id: string
@@ -46,6 +60,15 @@ export interface Stroke {
   raw?: RawSample[]
   /** Polyline strokes render with straight segments (no Catmull-Rom smoothing). */
   straight?: boolean
+  /**
+   * Drafting attributes (improvements C3). Styling lives on the stroke (the
+   * persistent drawable unit) rather than on derived Edges, which are regenerated
+   * on every deriveEdges() call and so cannot retain metadata.
+   */
+  /** Full stroke width in world units; falls back to 2× path half-width if absent. */
+  strokeWidth?: number
+  /** Line style; treated as 'solid' if absent (back-compat with older strokes). */
+  lineStyle?: LineStyle
 }
 
 /** A free-floating text annotation placed on the canvas (world-anchored). */
@@ -87,6 +110,9 @@ export interface LockPolygon {
 /** Programmatic intent categories an Intent Pin can carry (Cluster H). */
 export type IntentType = 'DENSITY' | 'PEDESTRIAN' | 'SQF' | 'LANDUSE'
 
+/** Canonical ordering of all intent types (for field/mix iteration). */
+export const INTENT_TYPES: IntentType[] = ['DENSITY', 'PEDESTRIAN', 'SQF', 'LANDUSE']
+
 /** Display label + field color per intent type. */
 export const INTENT_META: Record<IntentType, { label: string; color: string }> = {
   DENSITY: { label: 'Density', color: '#8b5cf6' },
@@ -108,3 +134,23 @@ export interface IntentPin {
 }
 
 export const emptyGraph = (): Graph => ({ vertices: {}, strokes: [] })
+
+/**
+ * Active snap guide emitted by the polyline snapping pipeline (Step 1).
+ *
+ * Coordinates are stored as [x, y] tuples in world space. The overlay renderer
+ * reads this to draw the appropriate visual indicator (dashed line, glyph, label).
+ */
+export type SnapGuideType = 'endpoint' | 'perpendicular' | 'parallel' | 'extension'
+
+export interface SnapGuide {
+  type: SnapGuideType
+  /** World-space origin of the guide line (e.g. the last placed polyline vertex). */
+  fromPoint: [number, number]
+  /** Snapped cursor coordinate — the destination the guide points to. */
+  toPoint: [number, number]
+  /** Edge id that triggered the snap (perpendicular / parallel). */
+  sourceEdgeId?: string
+  /** Vertex id that triggered the snap (endpoint). */
+  sourceVertexId?: string
+}

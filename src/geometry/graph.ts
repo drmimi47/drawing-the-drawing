@@ -1,4 +1,4 @@
-import type { Edge, Graph, PathPoint, RawSample, SamplePoint, Stroke, Vertex } from '../types/geometry'
+import type { Edge, Graph, LineStyle, PathPoint, RawSample, SamplePoint, Stroke, Vertex } from '../types/geometry'
 import { clipPolylineCapsule } from './erase'
 
 /**
@@ -97,6 +97,7 @@ export function addStrokeToGraph(
   color: string,
   raw?: RawSample[],
   straight?: boolean,
+  style?: { strokeWidth?: number; lineStyle?: LineStyle },
 ): Graph {
   const vertices: Record<string, Vertex> = { ...graph.vertices }
 
@@ -147,6 +148,8 @@ export function addStrokeToGraph(
     path: newInserts.size > 0 ? rebuildPath(path, newInserts) : path,
     raw,
     straight,
+    strokeWidth: style?.strokeWidth,
+    lineStyle: style?.lineStyle,
   }
 
   const strokes = graph.strokes.map((es) => {
@@ -196,7 +199,14 @@ export function eraseGraphCapsule(
         vertices[id] = { id, x: sp.x, y: sp.y }
         return { v: id, w: sp.w }
       })
-      strokes.push({ id: newId('s'), color: stroke.color, path, straight: stroke.straight })
+      strokes.push({
+        id: newId('s'),
+        color: stroke.color,
+        path,
+        straight: stroke.straight,
+        strokeWidth: stroke.strokeWidth,
+        lineStyle: stroke.lineStyle,
+      })
     }
   }
 

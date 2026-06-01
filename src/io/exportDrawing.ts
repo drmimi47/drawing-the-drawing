@@ -1,6 +1,7 @@
 import { useDrawingStore } from '../store/drawingStore'
 import { resolveStrokePoints } from '../geometry/graph'
-import type { Graph, SamplePoint, Stroke, TextLabel } from '../types/geometry'
+import { dashArray } from '../components/Canvas/strokeGeometry'
+import type { Graph, LineStyle, SamplePoint, Stroke, TextLabel } from '../types/geometry'
 
 /**
  * Export the drawing as clean vector (SVG / PDF) or raster (PNG), bounded to the
@@ -47,17 +48,26 @@ function readScene(): Scene {
 }
 
 /** Average full stroke width (2 × mean half-width), with a sensible minimum. */
-function strokeWidth(points: SamplePoint[]): number {
+function meanStrokeWidth(points: SamplePoint[]): number {
   if (points.length === 0) return 1
   const sum = points.reduce((acc, p) => acc + p.w, 0)
   return Math.max(0.75, (sum / points.length) * 2)
 }
 
-function strokePolylines(graph: Graph): { color: string; width: number; pts: SamplePoint[] }[] {
+interface ExportStroke {
+  color: string
+  width: number
+  lineStyle?: LineStyle
+  pts: SamplePoint[]
+}
+
+function strokePolylines(graph: Graph): ExportStroke[] {
   return graph.strokes
     .map((stroke: Stroke) => {
       const pts = resolveStrokePoints(graph, stroke)
-      return { color: stroke.color, width: strokeWidth(pts), pts }
+      // Explicit drafting width wins; otherwise derive from the path half-widths.
+      const width = stroke.strokeWidth ?? meanStrokeWidth(pts)
+      return { color: stroke.color, width, lineStyle: stroke.lineStyle, pts }
     })
     .filter((s) => s.pts.length >= 2)
 }
@@ -93,8 +103,10 @@ function buildSvg(scene: Scene): string {
 
   for (const s of strokePolylines(graph)) {
     const pts = s.pts.map((p) => `${fx(p.x)},${fy(p.y)}`).join(' ')
+    const dash = dashArray(s.lineStyle, s.width)
+    const dashAttr = dash ? ` stroke-dasharray="${dash[0].toFixed(2)} ${dash[1].toFixed(2)}"` : ''
     lines.push(
-      `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="${s.width.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`,
+      `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="${s.width.toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"${dashAttr}/>`,
     )
   }
 
@@ -159,8 +171,11 @@ export async function exportPNG() {
     s.pts.forEach((p, i) => (i === 0 ? ctx.moveTo(fx(p.x), fy(p.y)) : ctx.lineTo(fx(p.x), fy(p.y))))
     ctx.strokeStyle = s.color
     ctx.lineWidth = s.width
+    const dash = dashArray(s.lineStyle, s.width)
+    ctx.setLineDash(dash ?? [])
     ctx.stroke()
   }
+  ctx.setLineDash([])
 
   for (const t of scene.textLabels) {
     ctx.fillStyle = t.color
@@ -201,6 +216,8 @@ export async function exportPDF() {
     const [r, g, b] = hexToRgb(s.color)
     pdf.setDrawColor(r, g, b)
     pdf.setLineWidth(s.width)
+    const dash = dashArray(s.lineStyle, s.width)
+    pdf.setLineDashPattern(dash ?? [], 0)
     // Connected path via relative deltas so joins render with the round linejoin.
     const x0 = fx(s.pts[0].x)
     const y0 = fy(s.pts[0].y)
@@ -210,6 +227,7 @@ export async function exportPDF() {
     }
     pdf.lines(deltas, x0, y0, [1, 1], 'S', false)
   }
+  pdf.setLineDashPattern([], 0)
 
   for (const t of scene.textLabels) {
     const [r, g, b] = hexToRgb(t.color)

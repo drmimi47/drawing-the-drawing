@@ -39,7 +39,7 @@ export function PageSheet() {
         <bufferGeometry>
           <bufferAttribute attach="attributes-position" args={[border, 3]} />
         </bufferGeometry>
-        <lineBasicMaterial color="#3f444e" toneMapped={false} />
+        <lineBasicMaterial color="#c0c6cf" toneMapped={false} />
       </lineLoop>
     </group>
   )

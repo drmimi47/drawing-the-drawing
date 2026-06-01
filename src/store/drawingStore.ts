@@ -3,9 +3,11 @@ import type {
   Graph,
   IntentPin,
   IntentType,
+  LineStyle,
   LockPolygon,
   RawSample,
   SamplePoint,
+  SnapGuide,
   TextLabel,
 } from '../types/geometry'
 import { emptyGraph } from '../types/geometry'
@@ -124,8 +126,10 @@ interface DrawingState {
   toolMode: ToolMode
   stage: Stage
   strokeColor: string
-  /** Nominal stroke width in world units (1 world unit = 1px at zoom 1). */
+  /** Active pen weight — nominal stroke width in world units (1 unit = 1px @ zoom 1). */
   baseWidth: number
+  /** Active pen line style applied to newly drawn strokes (drafting hierarchy). */
+  lineStyle: LineStyle
   graph: Graph
   /** Spatial index of snap targets (vertices + edge midpoints), auto-rebuilt
    *  whenever the graph changes. Queried by the snapping engine. */
@@ -144,6 +148,9 @@ interface DrawingState {
   pendingText: PendingText | null
   /** When true, every pin shows its intent-type label (driven by toolbar hover). */
   showIntentLabels: boolean
+  /** When true, overlay a grid of region intent-concentration percentages
+   *  (driven by toolbar hover over the Intent Pin button). */
+  showIntentGrid: boolean
   /** Which edge the main tool dock is docked to. */
   toolbarPosition: ToolbarPosition
   /** Artboard (page sheet) size in world units. Independent world coordinate
@@ -159,14 +166,19 @@ interface DrawingState {
   mapActive: boolean
   /** Finalized GeoJSON drawn on the map, for the main app to reference/store. */
   mapGeometry: GeoJSON.FeatureCollection | null
+  /** Active CAD snap guide emitted by the polyline snapping pipeline (Step 1). */
+  activeSnapGuide: SnapGuide | null
   /** Undo/redo stacks: snapshots of graph + locks + pins before each action. */
   past: HistoryEntry[]
   future: HistoryEntry[]
 
+  /** Write the active snap guide (or clear it by passing null). Called each pointer-move frame by the polyline snapping pipeline. */
+  setSnapGuide: (guide: SnapGuide | null) => void
   setTool: (tool: ToolMode) => void
   setStage: (stage: Stage) => void
   setColor: (color: string) => void
   setBaseWidth: (width: number) => void
+  setLineStyle: (style: LineStyle) => void
   setSelection: (ids: string[]) => void
   clearSelection: () => void
   /** Segment strokes at the region boundary and select the enclosed pieces. */
@@ -190,6 +202,7 @@ interface DrawingState {
   /** Move a text label (used by the Edit tool drag); no undo history per move. */
   moveText: (id: string, x: number, y: number) => void
   setShowIntentLabels: (show: boolean) => void
+  setShowIntentGrid: (show: boolean) => void
   setToolbarPosition: (position: ToolbarPosition) => void
   /** Resize the independent world frame (page sheet) in world units. */
   setPageSize: (width: number, height: number) => void
@@ -226,7 +239,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   toolMode: 'DRAW',
   stage: 'SKETCH',
   strokeColor: '#1a1a1a',
-  baseWidth: 3.5,
+  baseWidth: 2,
+  lineStyle: 'solid',
   graph: emptyGraph(),
   spatialIndex: buildSnapIndex(emptyGraph()),
   selectedStrokeIds: [],
@@ -236,6 +250,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   textLabels: [],
   pendingText: null,
   showIntentLabels: false,
+  showIntentGrid: false,
   toolbarPosition: 'bottom',
   pageWidth: DEFAULT_PAGE_WIDTH,
   pageHeight: DEFAULT_PAGE_HEIGHT,
@@ -243,9 +258,11 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   metersPerWorldUnit: null,
   mapActive: false,
   mapGeometry: null,
+  activeSnapGuide: null,
   past: [],
   future: [],
 
+  setSnapGuide: (guide) => set({ activeSnapGuide: guide }),
   setTool: (tool) =>
     set((state) => ({
       toolMode: tool,
@@ -254,10 +271,13 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       // Abandon any in-progress pin/text placement when leaving those tools.
       pendingPin: tool === 'INTENT_PIN' ? state.pendingPin : null,
       pendingText: tool === 'TEXT' ? state.pendingText : null,
+      // Clear any active snap guide when leaving the polyline tool.
+      activeSnapGuide: tool === 'POLYLINE' ? state.activeSnapGuide : null,
     })),
   setStage: (stage) => set({ stage }),
   setColor: (color) => set({ strokeColor: color }),
   setBaseWidth: (width) => set({ baseWidth: width }),
+  setLineStyle: (style) => set({ lineStyle: style }),
   setSelection: (ids) => set({ selectedStrokeIds: ids }),
   clearSelection: () => set({ selectedStrokeIds: [] }),
   applyLassoSelection: (region) => {
@@ -386,6 +406,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   moveText: (id, x, y) =>
     set((state) => ({ textLabels: state.textLabels.map((l) => (l.id === id ? { ...l, x, y } : l)) })),
   setShowIntentLabels: (show) => set({ showIntentLabels: show }),
+  setShowIntentGrid: (show) => set({ showIntentGrid: show }),
   setToolbarPosition: (position) => set({ toolbarPosition: position }),
   setPageSize: (width, height) =>
     set((state) => {
@@ -417,9 +438,17 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   setVertexPositions: (updates) =>
     set((state) => {
       const vertices = { ...state.graph.vertices }
+      // Incrementally re-bucket only the moved vertices (and their incident edge
+      // midpoints) in place — this is the per-frame drag hot path, so it must not
+      // trigger a full index rebuild. Preserving the strokes reference signals to
+      // the index-maintenance subscription that topology is unchanged.
+      const grid = state.spatialIndex
       for (const id in updates) {
         const v = vertices[id]
-        if (v) vertices[id] = { ...v, x: updates[id].x, y: updates[id].y }
+        if (v) {
+          vertices[id] = { ...v, x: updates[id].x, y: updates[id].y }
+          grid.moveVertex(id, updates[id].x, updates[id].y)
+        }
       }
       return { graph: { vertices, strokes: state.graph.strokes } }
     }),
@@ -431,7 +460,10 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     set((state) => ({
       past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
       future: [],
-      graph: addStrokeToGraph(state.graph, points, color, raw, straight),
+      graph: addStrokeToGraph(state.graph, points, color, raw, straight, {
+        strokeWidth: state.baseWidth,
+        lineStyle: state.lineStyle,
+      }),
     })),
   eraseCapsule: (ax, ay, bx, by, r) => {
     const { graph } = get()
@@ -503,13 +535,17 @@ function snapshot(state: {
   }
 }
 
-// Keep the spatial snap index in lockstep with the graph. Any action that
-// replaces the graph object — stroke commit, polyline finish, erase, vertex edit,
-// lock/lasso segmentation, undo/redo, clear — automatically triggers a re-index.
-// This is the single place snap targets are kept current, so callers never have
-// to remember to rebuild it.
+// Keep the spatial snap index in lockstep with the graph (improvements C2).
+//
+// Position-only vertex moves (the drag hot path) are handled INCREMENTALLY inside
+// setVertexPositions, which re-buckets just the moved vertices in place and leaves
+// the strokes array reference untouched. Any action that changes topology — stroke
+// commit, polyline finish, erase, lock/lasso segmentation, undo/redo, clear —
+// produces a NEW strokes array, so strokes-reference inequality is an O(1) signal
+// that the edge set changed and the index must be rebuilt from scratch. This keeps
+// one central maintenance seam without the O(N) rebuild firing on every drag frame.
 useDrawingStore.subscribe((state, prev) => {
-  if (state.graph !== prev.graph) {
-    useDrawingStore.setState({ spatialIndex: buildSnapIndex(state.graph) })
-  }
+  if (state.graph === prev.graph) return
+  if (state.graph.strokes === prev.graph.strokes) return // position-only move, already indexed incrementally
+  useDrawingStore.setState({ spatialIndex: buildSnapIndex(state.graph) })
 })

@@ -17,8 +17,10 @@ import {
   FileText,
   Map as MapIcon,
   Sparkles,
+  PenLine,
 } from 'lucide-react'
 import { useDrawingStore, type ToolMode } from '../../store/drawingStore'
+import { LINEWEIGHTS, type LineStyle } from '../../types/geometry'
 import { importUnderlay } from '../../io/importUnderlay'
 import { exportSVG, exportPNG, exportPDF } from '../../io/exportDrawing'
 import './Ribbon.css'
@@ -60,8 +62,14 @@ function ToolBtn({ tool }: { tool: ToolDef }) {
   const toolMode = useDrawingStore((s) => s.toolMode)
   const setTool = useDrawingStore((s) => s.setTool)
   const setShowIntentLabels = useDrawingStore((s) => s.setShowIntentLabels)
+  const setShowIntentGrid = useDrawingStore((s) => s.setShowIntentGrid)
   const { key, label, Icon } = tool
   const active = toolMode === key
+  // Hovering Intent Pin previews the pin labels AND the region concentration grid.
+  const hoverIntent = (show: boolean) => {
+    setShowIntentLabels(show)
+    setShowIntentGrid(show)
+  }
   return (
     <button
       type="button"
@@ -69,8 +77,8 @@ function ToolBtn({ tool }: { tool: ToolDef }) {
       aria-pressed={active}
       title={label}
       onClick={() => setTool(key)}
-      onMouseEnter={key === 'INTENT_PIN' ? () => setShowIntentLabels(true) : undefined}
-      onMouseLeave={key === 'INTENT_PIN' ? () => setShowIntentLabels(false) : undefined}
+      onMouseEnter={key === 'INTENT_PIN' ? () => hoverIntent(true) : undefined}
+      onMouseLeave={key === 'INTENT_PIN' ? () => hoverIntent(false) : undefined}
     >
       <Icon size={16} strokeWidth={1.75} />
       <span className="rail-btn-label">{label}</span>
@@ -243,6 +251,98 @@ function ColorDropdown() {
   )
 }
 
+const LINE_STYLES: { key: LineStyle; label: string; dasharray: string }[] = [
+  { key: 'solid', label: 'Solid', dasharray: '' },
+  { key: 'dashed', label: 'Dashed', dasharray: '7 4' },
+  { key: 'long-dash', label: 'Long dash', dasharray: '13 5' },
+  { key: 'dotted', label: 'Dotted', dasharray: '0.1 4' },
+]
+
+/** A small SVG preview of a line at a given weight + dash pattern. */
+function LinePreview({ width, dasharray }: { width: number; dasharray: string }) {
+  return (
+    <svg className="rail-line-preview" width="48" height="14" viewBox="0 0 48 14" aria-hidden>
+      <line
+        x1="2"
+        y1="7"
+        x2="46"
+        y2="7"
+        stroke="currentColor"
+        strokeWidth={Math.max(1, Math.min(width, 7))}
+        strokeLinecap="round"
+        strokeDasharray={dasharray || undefined}
+      />
+    </svg>
+  )
+}
+
+/** Pen attributes: lineweight presets + line styles (drafting hierarchy). */
+function PenDropdown() {
+  const baseWidth = useDrawingStore((s) => s.baseWidth)
+  const setBaseWidth = useDrawingStore((s) => s.setBaseWidth)
+  const lineStyle = useDrawingStore((s) => s.lineStyle)
+  const setLineStyle = useDrawingStore((s) => s.setLineStyle)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [])
+
+  const activeStyle = LINE_STYLES.find((s) => s.key === lineStyle) ?? LINE_STYLES[0]
+
+  return (
+    <div ref={wrapRef} className="rail-dropdown-wrap">
+      <button
+        type="button"
+        className={`rail-btn${open ? ' is-active' : ''}`}
+        title="Lineweight & style"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <PenLine size={16} strokeWidth={1.75} />
+        <span className="rail-btn-label">Pen</span>
+      </button>
+
+      {open && (
+        <div className="rail-float-panel">
+          <div className="rail-float-label">Lineweight</div>
+          {LINEWEIGHTS.map((lw) => (
+            <button
+              key={lw.label}
+              type="button"
+              className={`rail-float-item${baseWidth === lw.width ? ' is-active' : ''}`}
+              aria-pressed={baseWidth === lw.width}
+              onClick={() => setBaseWidth(lw.width)}
+            >
+              <LinePreview width={lw.width} dasharray={activeStyle.dasharray} />
+              {lw.label}
+            </button>
+          ))}
+
+          <div className="rail-float-divider" />
+          <div className="rail-float-label">Line style</div>
+          {LINE_STYLES.map((ls) => (
+            <button
+              key={ls.key}
+              type="button"
+              className={`rail-float-item${lineStyle === ls.key ? ' is-active' : ''}`}
+              aria-pressed={lineStyle === ls.key}
+              onClick={() => setLineStyle(ls.key)}
+            >
+              <LinePreview width={2} dasharray={ls.dasharray} />
+              {ls.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Ribbon() {
   return (
     <div className="toolbar-rail">
@@ -259,6 +359,7 @@ export function Ribbon() {
 
       <div className="rail-sep" />
       <ColorDropdown />
+      <PenDropdown />
 
       <div className="rail-spacer" />
 

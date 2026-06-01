@@ -12,8 +12,8 @@ import { useIntentPinTool } from '../../hooks/useIntentPinTool'
 import { usePolyline } from '../../hooks/usePolyline'
 import { useTextTool } from '../../hooks/useTextTool'
 import { resolveStrokePoints } from '../../geometry/graph'
-import type { Graph, SamplePoint, Stroke } from '../../types/geometry'
-import { buildRibbon, buildPolylineRibbon, resampleCentripetalCatmullRom } from './strokeGeometry'
+import type { Graph, LineStyle, SamplePoint, Stroke } from '../../types/geometry'
+import { buildStrokeGeometry } from './strokeGeometry'
 import { MarchingAntsLine } from './MarchingAntsLine'
 import { LockFieldView } from './LockFieldView'
 import { IntentFieldView } from './IntentFieldView'
@@ -24,11 +24,28 @@ type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
 const SELECTION_COLOR = '#2f6fed'
 
-/** A variable-width ribbon for a centerline polyline (smoothed unless `straight`). */
-function RibbonMesh({ points, color, straight }: { points: SamplePoint[]; color: string; straight?: boolean }) {
+/**
+ * A ribbon for a centerline polyline (smoothed unless `straight`), honoring the
+ * stroke's drafting line style. Width falls back to 2× the first half-width when
+ * `strokeWidth` is absent (older strokes / live previews).
+ */
+function RibbonMesh({
+  points,
+  color,
+  straight,
+  lineStyle,
+  strokeWidth,
+}: {
+  points: SamplePoint[]
+  color: string
+  straight?: boolean
+  lineStyle?: LineStyle
+  strokeWidth?: number
+}) {
+  const width = strokeWidth ?? (points.length > 0 ? points[0].w * 2 : 2)
   const geometry = useMemo(
-    () => (straight ? buildPolylineRibbon(points) : buildRibbon(resampleCentripetalCatmullRom(points))),
-    [points, straight],
+    () => buildStrokeGeometry(points, straight, lineStyle, width),
+    [points, straight, lineStyle, width],
   )
 
   if (!geometry.positions || !geometry.indices) return null
@@ -47,7 +64,15 @@ function RibbonMesh({ points, color, straight }: { points: SamplePoint[]; color:
 /** Resolve a graph stroke to centerline points and render it (tinted when selected). */
 function StrokeView({ graph, stroke, selected }: { graph: Graph; stroke: Stroke; selected: boolean }) {
   const points = useMemo(() => resolveStrokePoints(graph, stroke), [graph, stroke])
-  return <RibbonMesh points={points} color={selected ? SELECTION_COLOR : stroke.color} straight={stroke.straight} />
+  return (
+    <RibbonMesh
+      points={points}
+      color={selected ? SELECTION_COLOR : stroke.color}
+      straight={stroke.straight}
+      lineStyle={stroke.lineStyle}
+      strokeWidth={stroke.strokeWidth}
+    />
+  )
 }
 
 /** Cosmetic anchor-point handles for the VECTOR edit tool (picking is on the plane). */
@@ -129,6 +154,8 @@ export function DrawingLayer() {
   const intentPins = useDrawingStore((s) => s.intentPins)
   const pendingPin = useDrawingStore((s) => s.pendingPin)
   const strokeColor = useDrawingStore((s) => s.strokeColor)
+  const lineStyle = useDrawingStore((s) => s.lineStyle)
+  const baseWidth = useDrawingStore((s) => s.baseWidth)
   const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
 
   const draw = useDrawing()
@@ -190,9 +217,11 @@ export function DrawingLayer() {
       {graph.strokes.map((stroke) => (
         <StrokeView key={stroke.id} graph={graph} stroke={stroke} selected={selectedSet.has(stroke.id)} />
       ))}
-      {draw.live && <RibbonMesh points={draw.live} color={draw.liveColor} />}
+      {draw.live && (
+        <RibbonMesh points={draw.live} color={draw.liveColor} lineStyle={lineStyle} strokeWidth={baseWidth} />
+      )}
       {toolMode === 'POLYLINE' && polyline.preview.length >= 2 && (
-        <RibbonMesh points={polyline.preview} color={strokeColor} straight />
+        <RibbonMesh points={polyline.preview} color={strokeColor} straight lineStyle={lineStyle} strokeWidth={baseWidth} />
       )}
       {selection.outline && (
         <MarchingAntsLine points={selection.outline.points} closed={selection.outline.closed} />

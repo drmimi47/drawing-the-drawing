@@ -6,16 +6,16 @@
 }
 
 :root {
-  /* The page sheet stays white; the workspace + chrome are dark (Bluebeam-style). */
-  --bg: #181a1b; /* dark workspace backdrop around the page */
-  --panel: #2d3139; /* toolbars / menus / headers */
-  --panel-2: #22252a; /* nested controls (inputs, active wells) */
-  --panel-border: #3f444e; /* thin subtle separators */
-  --text: #e6e8ea; /* high-contrast off-white */
-  --text-dim: #9aa0a6;
+  /* Light mode — clean professional design-tool chrome. */
+  --bg: #eef0f3; /* light grey workspace backdrop around the page */
+  --panel: #ffffff; /* toolbars / menus / headers */
+  --panel-2: #f3f5f7; /* nested controls (inputs, active wells) */
+  --panel-border: #d4d9e0; /* thin subtle separators */
+  --text: #1a1d22; /* high-contrast dark */
+  --text-dim: #6b7380;
   --accent: #2f6fed;
-  --hover: rgba(255, 255, 255, 0.08);
-  --panel-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  --hover: rgba(0, 0, 0, 0.055);
+  --panel-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
     Arial, sans-serif;
@@ -170,7 +170,7 @@ body {
   top: 0;
   left: 0;
   pointer-events: none;
-  background: rgba(128, 134, 142, 0.6);
+  background: rgba(80, 90, 105, 0.28);
   /* Hint the compositor; positions are driven only via transform. */
   will-change: transform;
 }
@@ -264,6 +264,31 @@ body {
   border: none;
   outline: none;
   text-shadow: none;
+}
+
+/* Per-cell intent concentration readout (hover grid over the Intent Pin tool).
+   Compact, color-coded percentage rows on a translucent backing for legibility
+   over the metaball gradient. */
+.intent-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 5px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid var(--panel-border);
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+}
+
+.intent-cell-row {
+  letter-spacing: 0.02em;
 }
 
 /* Hint shown while sizing an intent pin's radius. */

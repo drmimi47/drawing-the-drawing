@@ -3,37 +3,19 @@ import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 import { INTENT_META, type IntentPin } from '../../types/geometry'
 import { useDrawingStore, type PendingPin } from '../../store/drawingStore'
+import { MetaballOverlay } from './MetaballOverlay'
+import { IntentConcentrationGrid } from './IntentConcentrationGrid'
 
 /**
- * Intent-pin visualization (Cluster H, H6). Each pin emits a soft color-coded
- * radial field plus a constant-size CIRCLE marker. Hovering the toolbar's Intent
- * pin button reveals every pin's type label (plain colored text) above its
- * circle. The pending pin renders live while sizing.
+ * Intent-pin visualization (Cluster H, H6 + Cluster 2). Pins are rendered as
+ * constant-size CIRCLE markers; their fields are drawn by a single multi-channel
+ * MetaballOverlay that blends overlapping intent types by concentration (so
+ * overlaps no longer overwrite each other). Hovering the toolbar's Intent pin
+ * button reveals every pin's type label. The pending pin previews live (it feeds
+ * the overlay while its radius is being sized).
  */
 
-const FIELD_Z = -0.4
 const MARKER_Z = 0.6
-const MAX_ALPHA = 0.35
-
-const vertexShader = /* glsl */ `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`
-
-const fragmentShader = /* glsl */ `
-  precision mediump float;
-  varying vec2 vUv;
-  uniform vec3 uColor;
-  uniform float uMaxAlpha;
-  void main() {
-    float d = length(vUv - 0.5) * 2.0;
-    if (d > 1.0) discard;
-    gl_FragColor = vec4(uColor, (1.0 - d) * uMaxAlpha);
-  }
-`
 
 /** A soft white-filled circle texture so gl points render round, not square. */
 let circleTexture: THREE.CanvasTexture | null = null
@@ -51,25 +33,6 @@ function getCircleTexture(): THREE.CanvasTexture {
   circleTexture = new THREE.CanvasTexture(canvas)
   circleTexture.needsUpdate = true
   return circleTexture
-}
-
-function IntentField({ x, y, radius, color }: { x: number; y: number; radius: number; color: string }) {
-  const uniforms = useMemo(
-    () => ({ uColor: { value: new THREE.Color(color) }, uMaxAlpha: { value: MAX_ALPHA } }),
-    [color],
-  )
-  return (
-    <mesh position={[x, y, FIELD_Z]} renderOrder={-1} raycast={() => null}>
-      <planeGeometry args={[radius * 2, radius * 2]} />
-      <shaderMaterial
-        vertexShader={vertexShader}
-        fragmentShader={fragmentShader}
-        uniforms={uniforms}
-        transparent
-        depthWrite={false}
-      />
-    </mesh>
-  )
 }
 
 function PinMarkers({ pins, pending }: { pins: IntentPin[]; pending: PendingPin | null }) {
@@ -124,21 +87,24 @@ function PinMarkers({ pins, pending }: { pins: IntentPin[]; pending: PendingPin 
 
 export function IntentFieldView({ pins, pending }: { pins: IntentPin[]; pending: PendingPin | null }) {
   const showLabels = useDrawingStore((s) => s.showIntentLabels)
+  const showGrid = useDrawingStore((s) => s.showIntentGrid)
+
+  // All fields drawn in one pass; the pending pin previews live while sizing.
+  const fieldPins = useMemo(() => {
+    if (pending && pending.phase === 'radius' && pending.intentType) {
+      return [
+        ...pins,
+        { id: 'pending', x: pending.x, y: pending.y, radius: pending.radius, intentType: pending.intentType },
+      ]
+    }
+    return pins
+  }, [pins, pending])
 
   return (
     <>
-      {pins.map((p) => (
-        <IntentField key={p.id} x={p.x} y={p.y} radius={p.radius} color={INTENT_META[p.intentType].color} />
-      ))}
+      <MetaballOverlay pins={fieldPins} />
 
-      {pending && pending.phase === 'radius' && pending.intentType && (
-        <IntentField
-          x={pending.x}
-          y={pending.y}
-          radius={pending.radius}
-          color={INTENT_META[pending.intentType].color}
-        />
-      )}
+      {showGrid && <IntentConcentrationGrid pins={pins} />}
 
       <PinMarkers pins={pins} pending={pending} />
 

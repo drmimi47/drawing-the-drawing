@@ -1,0 +1,98 @@
+/**
+ * 2D geometric utilities for CAD-style polyline snapping (Step 1).
+ *
+ * All functions operate in world-space. Degenerate inputs (zero-length
+ * reference edges, coincident points) return null instead of dividing by zero.
+ */
+
+type Vec2 = { x: number; y: number }
+
+const EPS = 1e-10
+
+/**
+ * Project cursor point M onto the infinite line passing through A and B.
+ * Returns A when A and B are coincident (degenerate line).
+ */
+export function getProjectedPointOnLine(M: Vec2, A: Vec2, B: Vec2): Vec2 {
+  const dx = B.x - A.x
+  const dy = B.y - A.y
+  const len2 = dx * dx + dy * dy
+  if (len2 < EPS) return { x: A.x, y: A.y }
+  const t = ((M.x - A.x) * dx + (M.y - A.y) * dy) / len2
+  return { x: A.x + t * dx, y: A.y + t * dy }
+}
+
+/**
+ * Check if vector P→M is nearly parallel (or anti-parallel) to reference
+ * edge A→B within `angularThresholdRad`. If so, return the snapped cursor
+ * coordinate — M projected onto the ray from P in direction A→B.
+ *
+ * Uses the cross-product magnitude as a fast sine approximation so the
+ * threshold is symmetric around both 0° and 180° without an atan2 call.
+ */
+export function checkParallelSnap(
+  P: Vec2,
+  M: Vec2,
+  A: Vec2,
+  B: Vec2,
+  angularThresholdRad: number,
+): Vec2 | null {
+  const dx = B.x - A.x
+  const dy = B.y - A.y
+  const dLen = Math.sqrt(dx * dx + dy * dy)
+  if (dLen < EPS) return null
+
+  const vx = M.x - P.x
+  const vy = M.y - P.y
+  const vLen = Math.sqrt(vx * vx + vy * vy)
+  if (vLen < EPS) return null
+
+  const dnx = dx / dLen
+  const dny = dy / dLen
+  const vnx = vx / vLen
+  const vny = vy / vLen
+
+  // |cross(d̂, v̂)| = |sin θ|; small when parallel or anti-parallel
+  const cross = Math.abs(dnx * vny - dny * vnx)
+  if (cross > Math.sin(angularThresholdRad)) return null
+
+  // Snap to the parallel ray from P: project M onto P + t·d̂
+  const t = (M.x - P.x) * dnx + (M.y - P.y) * dny
+  return { x: P.x + t * dnx, y: P.y + t * dny }
+}
+
+/**
+ * Check if cursor M is within `distanceThreshold` (world units) of the line
+ * through P that is perpendicular to reference edge A→B. If so, return the
+ * exact foot of perpendicular from M to that line (the snapped coordinate).
+ *
+ * The perpendicular direction is the 90°-rotated unit vector of A→B, so the
+ * result is the closest point on the perp-line to M — not to segment A→B.
+ */
+export function checkPerpendicularSnap(
+  P: Vec2,
+  M: Vec2,
+  A: Vec2,
+  B: Vec2,
+  distanceThreshold: number,
+): Vec2 | null {
+  const dx = B.x - A.x
+  const dy = B.y - A.y
+  const dLen = Math.sqrt(dx * dx + dy * dy)
+  if (dLen < EPS) return null
+
+  // Perpendicular direction to A→B (rotated 90°)
+  const px = -dy / dLen
+  const py = dx / dLen
+
+  // Project M onto the perpendicular line through P: P + t·p̂
+  const t = (M.x - P.x) * px + (M.y - P.y) * py
+  const foot = { x: P.x + t * px, y: P.y + t * py }
+
+  // Distance from M to the perp-line equals distance from M to its foot
+  const ex = M.x - foot.x
+  const ey = M.y - foot.y
+  const dist = Math.sqrt(ex * ex + ey * ey)
+
+  return dist <= distanceThreshold ? foot : null
+}

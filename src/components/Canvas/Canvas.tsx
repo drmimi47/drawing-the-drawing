@@ -57,8 +57,8 @@ export function CanvasScene() {
         gl={{ antialias: true, preserveDrawingBuffer: true, stencil: true }}
         dpr={[1, 2]}
       >
-        {/* Dark workspace surrounding the white page sheet. */}
-        <color attach="background" args={['#181a1b']} />
+        {/* Light grey workspace surrounding the white page sheet. */}
+        <color attach="background" args={['#eef0f3']} />
 
         <CameraControls />
         <PageSheet />

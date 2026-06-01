@@ -1,14 +1,15 @@
 METABALL SKETCH — Project Information Document
 ================================================================================
 Purpose: Onboarding reference for collaborators and LLM coding agents. Describes
-the project's intent, technical architecture, and current feature set.
+the project's intent, technical architecture, and complete current feature set.
+Last updated: 2026-06-01
 ================================================================================
-
+ 
 
 WHAT THIS PROJECT IS
 --------------------
 Metaball Sketch is a web-based sketch-to-plan ideation tool for architects and
-urban designers. It is not a diffusion-based image renderer. It is a precision
+urban designers. It is NOT a diffusion-based image renderer. It is a precision
 vector drawing environment where the designer retains fine-grained authorial
 control over every line segment, and an LLM is used as a downstream co-resolver —
 not a first-pass guesser.
@@ -29,228 +30,418 @@ output controllable and site-specific.
 
 TECH STACK
 ----------
-- TypeScript, React 18, Vite
-- Zustand (global state store)
-- React Three Fiber (R3F) + Three.js — all drawing is WebGL, orthographic camera
-- Mapbox GL JS 3 — geospatial map overlay (optional, lazy-loaded)
-- @mapbox/mapbox-gl-draw + mapbox-gl-draw-snap-mode — drawing on the map
-- @turf/turf 7 — real-world area/length calculations on map geometry
-- pdfjs-dist 4 — import PDF files as raster underlays
-- jsPDF — export drawings as PDF
+- TypeScript 5, React 18, Vite 5
+- Zustand 5 — global state store (graph + tool state + transient UI flags)
+- React Three Fiber (R3F) + Three.js 0.169 — all drawing is WebGL, orthographic
+  camera (1 world unit = 1 px at zoom 1)
+- Custom GLSL shaders: metaball multi-channel concentration overlay,
+  marching-ants selection outline
+- @react-three/drei — Html utility for world-anchored DOM labels
+- Mapbox GL JS 3 + @mapbox/mapbox-gl-draw + mapbox-gl-draw-snap-mode —
+  geospatial overlay (lazy-loaded; never in main bundle)
+- @turf/turf 7 — real-world area/length/coordinate calculations
+- pdfjs-dist 4 — PDF first-page rasterization (dynamic import)
+- jsPDF — vector PDF export (dynamic import)
 - lucide-react — icons
-- Deployment: Vercel (Phase 2 introduces a serverless Edge Function for LLM calls)
+- Deployment: Vercel (Phase 2 adds a serverless Edge Function for LLM proxying)
 
 
 DATA MODEL (Source of Truth)
 ----------------------------
-All geometry is stored as a Planar Straight-Line Graph (PSLG). Renders are a
-derived cache of this graph — never the source of truth.
+All geometry is a Planar Straight-Line Graph (PSLG). Renders are a derived cache
+— never the source of truth.
 
-  RawSample    { x, y, pressure: 0, t }              — pointer stream (pressure ignored)
-  Vertex       { id, x, y }                           — shared at stroke intersections
-  PathPoint    { v: vertexId, w: half-width }         — per-stroke width reference
+  RawSample    { x, y, pressure: 0, t }              pointer stream (pressure ignored)
+  Vertex       { id, x, y }                           shared at stroke intersections
+  PathPoint    { v: vertexId, w: number }             per-stroke half-width reference
   Stroke       { id, color, path: PathPoint[],
-                 raw?: RawSample[], straight?: bool } — ordered path through vertices
-  Edge         { id, strokeId, v0, v1 }               — derived from strokes
+                 raw?: RawSample[], straight?: bool } ordered path through vertices
+  Edge         { id, strokeId, v0, v1 }               derived from strokes
   Graph        { vertices: Record<id,Vertex>,
-                 strokes: Stroke[] }                  — the single source of truth
-  LockPolygon  { id, points: {x,y}[], featherRadius } — lock region (rectangle drawn by user)
-  IntentPin    { id, x, y, radius, intentType }       — spatial prompt pin
-  TextLabel    { id, x, y, text, color, size }        — free-floating annotation
+                 strokes: Stroke[] }                  single source of truth
+  LockPolygon  { id, points: {x,y}[], featherRadius } lock region (rectangle)
+  IntentPin    { id, x, y, radius, intentType }       spatial prompt pin
+  TextLabel    { id, x, y, text, color, size }        free-floating annotation
+  Underlay     { src, opacity, pixelWidth, pixelHeight,
+                 x, y, width, height }                raster import with own transform
   Snapshot     { graph, lockPolygons, intentPins,
-                 textLabels }                         — undo/redo unit
+                 textLabels }                         undo/redo unit
 
-World coordinate system: 1 world unit = 1 px at zoom 1. The page sheet is
-centered at the origin (0,0). Coordinates are right-handed (y up in world space,
-flipped to screen space only at render/export).
+World coordinate system: origin (0,0) at page center, y-axis up, right-handed.
+Export flips y: fx(x) = x + W/2, fy(y) = H/2 - y (top-left origin, y down).
 
-The page sheet is an INDEPENDENT world coordinate frame: its size (pageWidth/
-pageHeight) is never altered by imports. An imported PDF/image becomes an Underlay
-carrying its own placement transform (centered rect: x, y, width, height in world
-units, aspect-preserved to fit inside the page) plus its intrinsic pixel dims —
-so assets can be swapped in/out without disturbing the coordinate system or any
-existing geometry. A real-world scale (metersPerWorldUnit) is held in the store;
-it is currently calibrated live by the active Mapbox projection (see MAP section)
-and is null when uncalibrated.
+The page sheet is an INDEPENDENT world frame: its size (pageWidth/pageHeight,
+default 1080×720) is NEVER altered by imports. setPageSize() controls it
+explicitly (re-fits any active underlay). An imported asset becomes an Underlay
+carrying its own placement transform (centered, aspect-fit to 92% of the page
+frame), so assets can be swapped without disturbing the coordinate system.
+
+A real-world scale (metersPerWorldUnit) is held in the store: null until
+calibrated by the active Mapbox projection, then updated live on every map
+move/zoom via Web Mercator ground resolution math.
 
 
 RENDERING PIPELINE
 ------------------
 Three tiers, rebuilt from the graph on demand:
 
-  Tier 1 — Raw samples:   stored on the Stroke for future re-analysis
-  Tier 2 — Graph:         Vertex + PathPoint source of truth
-  Tier 3 — Mesh:          centripetal Catmull-Rom resampled centerline →
-                          uniform-width triangle ribbon (averaged-tangent normals,
-                          round end-caps, 16-step half-disk fans)
+  Tier 1 — Raw samples:  stored on Stroke for future re-analysis
+  Tier 2 — Graph:        Vertex + PathPoint source of truth
+  Tier 3 — Mesh:         centripetal Catmull-Rom resampled centerline →
+                         uniform-width triangle ribbon (averaged-tangent normals,
+                         round end-caps, 16-step half-disk fans)
 
-Strokes are UNIFORM thickness; pressure sensitivity has been deliberately removed.
-Polylines use a separate builder (buildPolylineRibbon) that preserves sharp
-corners with miter/bevel joins — no spline smoothing.
+Strokes are UNIFORM thickness (pressure sensitivity deliberately removed).
+Polylines use buildPolylineRibbon — sharp miter/bevel corners, no spline.
+An invisible viewport-following InteractionPlane (useFrame resizes it each tick)
+receives all raycasts, giving world-space pointer coords that survive pan/zoom.
 
-WebGL interaction uses an invisible viewport-following InteractionPlane that
-receives raycasts, giving world-space pointer coordinates that survive pan/zoom.
+Lineweights & line styles (drafting hierarchy, improvements C3): styling lives on
+the Stroke (the persistent drawable), NOT on derived Edges — deriveEdges()
+regenerates edges every call, so they cannot retain metadata. A Stroke carries
+optional strokeWidth (world units; falls back to 2× path half-width) and lineStyle
+('solid' | 'dashed' | 'long-dash' | 'dotted'; absent ⇒ solid). The active pen
+(store.baseWidth + store.lineStyle, set via the toolbar Pen dropdown — LINEWEIGHTS
+presets Fine/Standard/Bold/Thick + the four styles) is stamped onto each new stroke
+at commit. buildStrokeGeometry() routes solid strokes straight through the smooth
+or polyline ribbon builder; for dashed/dotted it walks the centerline by cumulative
+arc length (dashArray() returns [on, off] in WORLD units, proportional to width so
+the pattern stays balanced at any weight and zoom), interpolating a boundary point
+at each dash edge, builds one ribbon per "on" run, and merges them into one mesh.
+The SAME dashArray() drives the SVG (stroke-dasharray), PNG (ctx.setLineDash) and
+PDF (setLineDashPattern) exporters, so screen and file output match. Style fields
+are preserved through erase and lasso/lock re-segmentation so they survive editing.
 
 
 SPATIAL INDEX & SNAPPING ENGINE
--------------------------------
-A uniform spatial hash grid (geometry/spatialIndex.ts, SpatialGrid) indexes every
-snap target in the PSLG: each vertex (VERTEX target — also covers intersections,
-which are already shared vertices) and each derived edge's midpoint (MIDPOINT
-target). The grid is held in the Zustand store and auto-rebuilt by a store
-subscription whenever graph !== prevGraph — so it is always in lockstep with the
-geometry and callers never rebuild it manually. Radius queries only touch the grid
-cells overlapping the query box, keeping lookups fast as the graph grows.
+---------------------------------
+src/geometry/spatialIndex.ts — SpatialGrid: a uniform spatial hash grid (64-unit
+cells). Two snap target types are indexed:
 
-The snapping engine is active for the Polyline and Vector Edit tools. On pointer
-move/placement the cursor's world position is queried against the index with a
-radius of SNAP_THRESHOLD_PX (8px) ÷ camera zoom; a hit locks the interaction
-exactly onto the target. Vertices take priority over midpoints; object snap takes
-priority over Shift-ortho. Vector Edit excludes the dragged vertex (and its own
-edges) so it cannot snap to itself. A screen-constant indicator (SnapIndicator)
-marks the active target: a SQUARE for a vertex/endpoint, a TRIANGLE for a midpoint.
+  VERTEX   — every graph vertex. Because the PSLG inserts a shared vertex at every
+             stroke crossing, this automatically covers intersections, endpoints,
+             and any manually placed node — no separate intersection index needed.
+  MIDPOINT — the midpoint of every derived edge (one per consecutive PathPoint pair
+             in each stroke). Computed as (v0 + v1) / 2 at index time.
+
+Storage: the grid stores topology + position (not pre-baked SnapPoints), so it
+can be edited incrementally. String-keyed Maps key on "cx:cy" = floor(coord/cell):
+  cellVerts   cellKey -> Set<vertexId>   verts whose position lands in the cell
+  cellMids    cellKey -> Set<edgeKey>    edges whose midpoint lands in the cell
+  vertexPos   vertexId -> {x,y}          live positions
+  vertexCell  vertexId -> cellKey        reverse lookup (a point is in one cell)
+  edges       edgeKey  -> [v0,v1]        endpoint ids
+  edgeMidCell edgeKey  -> cellKey        reverse lookup for midpoints
+  vertexEdges vertexId -> Set<edgeKey>   adjacency (moved vertex -> its midpoints)
+Query scans a (2R+1)² block of adjacent cells (minCx..maxCx × minCy..maxCy),
+touching only the cells that can possibly hold a point within radius R — O(1)-ish
+vs. O(n) full scan. For typical SNAP_THRESHOLD_PX/zoom ≈ 8–40 world units and
+cell=64, the query block is 1–4 cells in each axis. SnapPoints are materialized
+lazily, only for the winning candidate, so per-query allocation is ~zero.
+
+Lifecycle (incremental, improvements C2): the grid is no longer wiped and rebuilt
+on every mutation. The drag hot path (setVertexPositions) calls grid.moveVertex
+per moved vertex, which re-buckets just that vertex and the midpoints of its
+incident edges (O(incident) cells) IN PLACE — so dragging one vertex among
+thousands stays 60 FPS. Topology changes still rebuild from scratch, routed
+through one seam: setVertexPositions preserves the graph.strokes array reference,
+while every topology-changing action (stroke commit, polyline finish, erase,
+lasso/lock segmentation, undo, redo, clear) produces a NEW strokes array. The
+Zustand subscribe() therefore rebuilds only when state.graph.strokes !==
+prev.graph.strokes — an O(1) test that skips the rebuild for position-only moves
+(already indexed incrementally) yet auto-covers any edge-set change with zero
+per-action boilerplate. Incremental methods: addVertex / moveVertex /
+removeVertex / addEdge / removeEdge; empty buckets and dead adjacency sets are
+pruned on removal so no stale ids linger.
+
+nearest(x, y, radius, exclude?) query:
+  - Scans overlapping grid cells, maintains two separate best candidates:
+    bestVertex (closest VERTEX within r²) and bestMid (closest MIDPOINT within r²).
+  - Returns bestVertex if found, otherwise bestMid — VERTEX always takes priority,
+    even when a midpoint is geometrically closer (endpoint snap is the stronger
+    intent; mirrors AutoCAD/Revit snap priority).
+  - exclude: Set<vertexId> — skips any target whose vid (VERTEX) or either edge
+    endpoint (MIDPOINT) is in the set. Used by Vector Edit so a dragged vertex
+    cannot snap to itself or to midpoints of its own edges.
+
+Snap threshold: SNAP_THRESHOLD_PX = 8 (screen pixels) ÷ camera.zoom → world
+units. Converts the activation radius into world space so the snap zone stays
+visually constant as the user zooms in or out.
+
+Active tools:
+  Polyline (usePolyline.ts) — probes the index on every pointer move (showing
+    the indicator before any vertices are placed) and on every click. If a target
+    is within threshold the cursor locks exactly to it; otherwise Shift-ortho
+    applies if held. Object snap takes priority over Shift-ortho.
+  Vector Edit (useVectorEdit.ts) — probes on every pointer move while dragging a
+    vertex, excluding that vertex and its own edges via the exclude set. Applies
+    the snapped position to setVertexPositions so connected strokes update live.
+
+SnapIndicator (components/Canvas/SnapIndicator.tsx):
+  A lineLoop built once as a unit outline (half-extent = 1) and rescaled by
+  HALF_PX (6px) / camera.zoom each frame via useFrame. Screen-constant physical
+  size regardless of zoom level. Two shapes:
+    SQUARE  (□) — 4-vertex lineLoop — for VERTEX / endpoint targets
+    TRIANGLE (△) — 3-vertex lineLoop — for MIDPOINT targets
+  renderOrder 40, depthTest false, frustumCulled false — always on top.
 
 
-FEATURE INVENTORY (currently implemented)
-------------------------------------------
+ISOLATED METABALL INTENT FIELD SYSTEM
+--------------------------------------
+src/utils/metaballField.ts — All math uses the Wyvill soft-object falloff:
+  potential = (1 - d²/r²)³   for d < pin.radius,  else 0
+
+  evaluatePinField(x, y, type, pins):
+    Filters to the targeted IntentType only (strict per-type isolation — a
+    Density pin NEVER bleeds into the Pedestrian field). Sums Wyvill potentials.
+
+  getIntentConcentration(x, y, pins) → { total, fields, mix }:
+    Runs evaluatePinField for all 4 types. total = sum. mix = normalized ratios
+    (sums to exactly 1 where total > 0 — 100% of local planner intent allocated).
+
+  getRegionConcentration(minX, minY, maxX, maxY, pins) → IntentConcentration:
+    3×3 supersample of a cell, averages absolute fields before taking ratios.
+    Yields the true area-weighted composition (same as what the LLM reads per
+    region). Averaging fields-then-dividing is mathematically correct;
+    averaging ratios would not be.
+
+src/components/Canvas/MetaballOverlay.tsx — GPU visualization:
+  A single full-coverage plane over the pins' AABB. Fragment shader (highp float
+  — required for world coords up to ~10³ and d² up to ~10⁶ which overflow mediump
+  ~65504) evaluates all 4 isolated fields per fragment via the Wyvill formula,
+  then blends brand colors by relative concentration: green+purple overlap →
+  teal-purple mix. Alpha tracks absolute total strength. VIS_THRESHOLD = 0.15
+  drops background fragments.
+  Pin streaming (improvements C1): pins are no longer passed as flat uniform
+  arrays (which hard-capped the scene at 64 pins). They are packed one RGBA float
+  texel per pin — rgba = (x, y, radius, typeIndex) — into a THREE.DataTexture
+  (RGBAFormat / FloatType, Nearest min+mag filter), TEX_WIDTH = 256 texels/row,
+  height grown by row on demand. The shader is GLSL ES 3.0 (glslVersion GLSL3) so
+  the field loop can use the runtime bound `uTotalPins`; it decodes texel i at
+  uv = ((i%W)+0.5)/W, (floor(i/W)+0.5)/H and samples it. No fixed cap — thousands
+  of pins render in one draw call. Pin mutations only rewrite the texture's
+  Float32Array and flip needsUpdate (no shader recompile); the texture is grown
+  grow-only and disposed on unmount so rapid mutations never leak GPU memory.
+
+src/components/Canvas/IntentConcentrationGrid.tsx — Hover inspection overlay:
+  Triggered by showIntentGrid (set when hovering the Intent Pin ribbon button).
+  Discretizes the AABB into 56-unit world cells, calls getRegionConcentration per
+  cell, renders cell outlines as lineSegments (world space, tracks pan/zoom) and
+  % labels as drei Html DOM nodes. Displays only cells with total >= VIS_THRESHOLD.
+  Each label shows short codes (D/P/S/L) + rounded percentage, colored by type,
+  sorted by dominance. The data is the exact mix the Phase-2 serializer reads.
+
+src/utils/marchingSquares.ts — Generic 16-case marching squares:
+  Samples a scalar field over a regular grid, emits line segments per cell via the
+  full 16-case lookup table (explicit saddle handling for cases 5 and 10), then
+  stitches loose segments into closed rings by endpoint matching (quantized to
+  avoid float mismatch). Generic — takes any (x, y) → number field.
+
+src/utils/intentContours.ts — Per-type isoline extraction:
+  extractIntentContours(pins) runs marchingSquares INDEPENDENTLY per IntentType
+  at INTENT_ISO_LEVEL = 0.15 (= shader VIS_THRESHOLD, so rings align with the
+  visible field edge). Returns per-type closed Ring[] arrays. Bounds padded by
+  one cell to guarantee rings close at the border.
+ 
+src/io/intentSerialization.ts — Multi-channel LLM payload (Phase 2 prep):
+  serializeIntent(graph, pins) → { vertices, regions }
+  Every PSLG vertex carries an intentMix { density, pedestrian, sqf, landuse }
+  sampled at its point. Every field-boundary region (from extractIntentContours)
+  carries the mix sampled at its centroid. Keys are lowercase, values normalized
+  0–1. Example:
+    { id: "density-region-0", type: "density", positions: [...],
+      intentMix: { density: 0.60, pedestrian: 0.40, sqf: 0.0, landuse: 0.0 } }
+  Pure data preparation — no network call. Phase 2 wires it to api/generate.ts.
+
+
+LOCKING ARCHITECTURE
+---------------------
+LockPolygon is drawn by a marquee drag (LASSO_LOCK tool). Visual: flat,
+semi-transparent grey (binary pointInPolygon fill — the feather gradient removed
+from the visual for clarity).
+
+lockInfluenceAt(x, y, locks) in geometry/locks.ts: interior distance field.
+  0.0 at polygon boundary → 1.0 at depth ≥ featherRadius inside the polygon.
+  Multiple locks combined by max (union). Drives the Normalize pipeline (vertex
+  delta scaled by 1 - influence) and will gate the Generate pipeline.
+
+Intent Pins are SPATIAL PROMPTS — they do NOT freeze geometry. They mark
+programmatic intent. The two-layer system (geometric lock + programmatic intent)
+is the precision advantage over prompt-only generation.
+
+
+NORMALIZATION
+--------------
+Entry point: user selects strokes with Marquee or Lasso, right-clicks inside the
+selection → "Clean up" panel with a strength slider (0–1). Normalization is
+ALWAYS selection-scoped and explicitly triggered — geometry never mutates
+automatically. ESC cancels and reverts via revertHistory().
+
+Pipeline (src/geometry/mutations/):
+
+  normalizeSelection.ts — computeNormalizeTargets(graph, strokeIds):
+    For each selected stroke, resolves its PathPoints to world-space centerline
+    points, calls normalizeStroke(), and maps the returned target positions back
+    to vertex IDs. Produces two Maps: originals (current positions) and targets
+    (fitted positions). Vertices that belong to no fitted stroke keep original =
+    target (they don't move). The caller lerps original → target by strength.
+
+  normalize.ts — normalizeStroke(points: Pt[]): Pt[] | null:
+    The primitive classifier + fitter. Returns 1:1 target positions or null if
+    no confident fit. Classification order (first match wins):
+
+    OPEN STROKE → best-fit straight line
+      Uses PCA on the point cloud: builds the 2×2 scatter matrix [Sxx Sxy; Sxy Syy],
+      solves for the dominant eigenvector via θ = 0.5·atan2(2·Sxy, Sxx−Syy), finds
+      the min/max projection extents, and distributes the n output points uniformly
+      along the fitted line segment. H/V snap: if the line angle is within 8°
+      (HV_SNAP_RAD = 8π/180 rad) of a cardinal axis, the line is locked exactly
+      horizontal or vertical before distributing points.
+
+    CLOSURE TEST (before fitting closed shapes)
+      A stroke is treated as closed when its endpoint gap < 20% of total perimeter
+      (CLOSE_GAP_FRAC = 0.2) AND it has ≥ 4 unique points.
+
+    CIRCLE (tried before polygons, only when m ≥ 8 points)
+      Algebraic least-squares via the Pratt formulation. Reduces to a 3×3 linear
+      system over the moments {Sx, Sy, Sxx, Syy, Sxy, Sxz, Syz, Sz}:
+        [Sxx Sxy Sx] [A]   [Sxz]
+        [Sxy Syy Sy] [B] = [Syz]
+        [Sx  Sy  n ] [C]   [Sz ]
+      Center = (A/2, B/2), radius = √(C + cx² + cy²). Solved by Gauss-Jordan
+      with partial pivoting. Accepted only if RMS radial error / R < 0.18
+      (CIRCLE_RESIDUAL_MAX). Each fitted point is projected radially: angle =
+      atan2(p.y − cy, p.x − cx), target = (cx + r·cos, cy + r·sin).
+
+    CORNER DETECTION (shared by triangle and rectangle)
+      detectCorners() rotates the loop to start at the point farthest from the
+      centroid (most likely a salient corner), then runs an augmented RDP on the
+      closed loop with ε = 5% of the bounding-box diagonal (CORNER_EPS_FRAC =
+      0.05). Returns the sorted indices of dominant corners.
+
+    TRIANGLE (3 detected corners)
+      Corner positions are taken directly from the loop at the detected indices.
+      Every loop point is then slid to its arc-length-proportional position along
+      the triangle edges via polygonTargets(): the perimeter is parameterized 0–1,
+      each point's f = cumArc/perimeter is mapped to the nearest inter-corner
+      segment, and the point is linearly interpolated between the two bounding
+      corner positions (corners snap exactly; intermediate points slide).
+
+    RECTANGLE (4 detected corners)
+      fitRectangle() enforces right-angle geometry:
+      1. Edge orientations: average the 4 edge angles using the 4× angle trick
+         (sum cos(4θ) and sin(4θ), then atan2/4) to get a modulo-90° consensus
+         orientation θ and its perpendicular — avoids circular-mean wraparound.
+      2. Oriented bounding box: projects all loop points onto the (ux, uy) and
+         (vx, vy) axes to find umin/umax/vmin/vmax, yielding four exact corners.
+      3. Each detected corner is snapped to its nearest OBB corner by comparing
+         its (u,v) projection to the center umid/vmid.
+      4. Degenerate check: all 4 OBB corners must be claimed by distinct detected
+         corners; returns null otherwise (no fit).
+      Points then slide via polygonTargets() as with triangle.
+
+  Lock gating: strength is modulated per vertex by (1 - lockInfluenceAt(v.x, v.y,
+  locks)) before application. A vertex at influence 1.0 (hard lock core) does not
+  move regardless of strength slider. Feather zone vertices move proportionally.
+
+Improvements needed / known gaps:
+  - No multi-stroke fitting (each stroke is fit independently; parallel corridors,
+    L-intersections, and T-junctions are not detected across strokes).
+  - No ellipse fitting; near-elliptical closed strokes currently fall through to
+    null (no fit).
+  - Urban morphology extensions (corridor detection, convex polygon generalization,
+    greenway smoothing) are designed in the plan but not yet wired to the UI.
+
+
+FEATURE INVENTORY
+------------------
 
 CANVAS & NAVIGATION
-- R3F orthographic scene, white page sheet centered at origin
-- Dark workspace backdrop (#181a1b) surrounds the white sheet
-- Page sheet aspect ratio: ARCH-D 3:2 landscape (1080×720 world units default)
-  — an independent world frame; imports no longer resize it (setPageSize controls
-  it explicitly, re-fitting any active underlay)
-- Pan: middle-click drag, Space+drag, or Pan tool
-- Zoom: scroll wheel, cursor-anchored (no drift), MIN 0.2× MAX 20×
-- Undo / Redo: Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z or Y — snapshots graph +
-  locks + pins + text labels
-
-DRAWING TOOLS (Sketch ribbon tab)
-- Draw: freehand, uniform line weight, RDP-simplified centerline,
-  centripetal Catmull-Rom smooth ribbon, round caps/joins
-- Polyline: click-to-place vertices, straight-segment quads with miter joins,
-  sharp corners preserved; Shift snaps the rubber-band segment to orthogonal (H/V);
-  object-snaps to existing vertices/midpoints (snap wins over Shift-ortho);
-  double-click or Enter to finish; click near start vertex to close
-- Erase: swept-capsule erase, splits strokes at intersection, stress-tested
-- Pan: dedicated pan mode (also available via Space)
-- Text: click to place free-floating text labels; drag to reposition in Edit mode
-
-NORMALIZATION TOOLS (Normalize ribbon tab)
-- Marquee Select: drag a rectangle, selects strokes inside by vertex inclusion
-- Lasso Select: freehand polygon selection
-- Edit (Vector): drag vertices to reshape; drag text labels to reposition
-- Lock Region: drag a rectangle to place a semi-transparent grey lock overlay
-  (uniform flat fill, no feathering visually); underlying lockInfluenceAt() distance-
-  field logic is intact and gates the Normalize/Generate pipeline
-- ESC clears any active selection
-
-PIN TOOLS (Pin ribbon tab)
-- Intent Pin: click to place, then choose intent type from popup, then drag to
-  set radius. Types: Density (purple), Pedestrian flow (green), SQF priority
-  (orange), Land use (blue). Pins render as colored circles with metaball gradient
-  fields. Hovering the Intent Pin button in the ribbon reveals all pin type labels
-  on the canvas.
-
-IMPORT / EXPORT (Import ribbon tab)
-- Image import: PNG/JPG/etc. loaded as a dimmed raster underlay (50% opacity)
-  for tracing; placed as a centered, aspect-fit rect inside the page frame
-  (the page size is NOT changed — decoupled asset transform)
-- PDF import: first page rasterized via pdf.js (2× supersample), loaded as an
-  underlay the same way (centered, aspect-fit, page frame unchanged)
-- Remove underlay: clears the underlay; the page frame is unaffected
-- Multiple assets can be swapped against one stable coordinate frame
-- Export SVG: clean vector polylines with round caps/joins + text
-- Export PNG: 2× raster, composites underlay + strokes + text
-- Export PDF: vector paths via jsPDF + composited underlay
-
-MAP / GEOSPATIAL (Import ribbon tab, Geospatial group)
-- Toggle button launches a Mapbox GL JS map overlaid inside the canvas bounds
-  (z-index 8, confined to the canvas area via absolute positioning)
-- MapboxDraw with snap-enabled modes (SnapPolygonMode, SnapLineMode,
-  SnapPointMode, SnapDirectSelect) — vertex/edge snapping while drawing
-- Live Turf.js measurements: polygon area (acres + ft²), line length (m + ft),
-  point coordinates — displayed in a floating HUD (bottom-left of canvas)
-- Live real-world scale calibration: on every map move/zoom the Web Mercator
-  ground resolution (meters per pixel) is recomputed from the current center
-  latitude + zoom — this IS meters-per-world-unit since 1 world unit = 1px at
-  zoom 1. It is published to the store (metersPerWorldUnit) and shown in the HUD
-  as "Scale · 1 unit ≈ X m/km". Cleared when the map closes. Helper math lives in
-  geometry/geoScale.ts (mercatorMetersPerWorldUnit, formatScale)
-- draw.create / draw.update / draw.delete / draw.selectionchange / draw.render
-  events all refresh the HUD and publish finalized GeoJSON to the Zustand store
-  under mapGeometry
-- Token loaded from VITE_MAPBOX_TOKEN env var (never hardcoded); shows a clear
-  error notice if unset
-- Mapbox chunk is lazy-loaded (React.lazy + Suspense) so it does not impact
-  initial bundle size; crosshair is hidden while map is active
+- R3F orthographic scene; light grey (#eef0f3) workspace backdrop, white page
+  sheet; page border line (#c0c6cf)
+- Pan: middle-click drag, Space+drag, Pan tool
+- Zoom: scroll wheel, cursor-anchored, MIN 0.2× MAX 20×
+- Undo/Redo: Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z or Y (snapshots full state)
+- ESC clears active selection
 
 UI SHELL
-- Top menu bar: "METABALL SKETCH" brand + File / Document dropdown menus
-  (placeholders; snappy non-rounded dropdowns)
-- Ribbon toolbar (Word/Revit style): two rows — tab headers (Import · Sketch ·
-  Normalize · Pin · Generate) + tool strip below. Sketch is the default tab.
-- Generate tab: placeholder ("coming soon") — reserved for Phase 2 LLM
-- Full-viewport crosshair: two 1px lines following the pointer via rAF-throttled
-  translate3d (GPU-accelerated, pointer-events:none); medium grey color
-- No floating toolbar (removed); ribbon is the primary tool surface
+- Top menu bar: "METABALL SKETCH" brand + File / Document placeholders
+- Single-row compact tool rail (46px): [Import▼] | Draw Poly Pan Erase Text |
+  Marquee Lasso Edit Lock | Intent Pin | [Color▼] | — | Generate (disabled)
+  Replaces the old two-row Word/Revit ribbon (~106px); saves ~60px canvas height.
+  Import and Color open floating contextual panels; all other tools are direct.
+- Full-viewport crosshair: 1px lines via rAF dirty-flag + translate3d (GPU-
+  accelerated); hidden while map active; light-mode color rgba(80,90,105,0.28)
+
+SKETCH TOOLS
+- Draw: freehand, uniform width, RDP-simplified, centripetal Catmull-Rom ribbon,
+  round caps/joins
+- Polyline: click-to-place, straight quads, miter joins; Shift-ortho constraint;
+  object snap to vertices/midpoints (snap priority > Shift-ortho); double-click
+  or Enter to finish; click near start to close
+- Erase: swept-capsule, splits at intersections
+- Pan: dedicated mode (also Space)
+- Text: click to place; drag to reposition in Vector Edit mode
+
+NORMALIZE TOOLS
+- Marquee Select: rectangle drag, selects by vertex inclusion
+- Lasso Select: freehand polygon selection, segments at boundary
+- Edit (Vector): drag vertices to reshape; drag text labels; snaps to nearby
+  vertices/midpoints while dragging (excludes self)
+- Lock Region: rectangle drag places semi-transparent grey lock overlay
+
+PIN TOOLS
+- Intent Pin: click → type popup → drag to set radius
+  Types: Density (purple), Pedestrian flow (green), SQF priority (orange),
+  Land use (blue)
+- Hovering the Intent Pin button: reveals per-pin type labels AND overlays
+  the region concentration grid (accurate % data, not pseudo data)
+
+SNAP INDICATORS
+- SnapIndicator: screen-constant lineLoop glyph at active snap target
+  SQUARE = vertex/endpoint, TRIANGLE = midpoint
+
+IMPORT / EXPORT
+- Image import: raster underlay, aspect-fit centered inside page frame,
+  page frame NOT resized
+- PDF import: first page via pdf.js (2× supersample), same placement logic
+- Remove underlay: clears asset; page frame unaffected
+- Export SVG (vector), PNG (2× raster), PDF (jsPDF vector + underlay)
+
+MAP / GEOSPATIAL
+- Mapbox GL JS 3 overlay, lazy-loaded (React.lazy + Suspense)
+- MapboxDraw with snap modes (vertex/edge/midpoint snapping)
+- Turf.js live measurements: polygon area, line length, point coords — HUD
+- Live scale calibration: mercatorMetersPerWorldUnit(lat, zoom) recomputed on
+  every map move/zoom; published to store as metersPerWorldUnit; shown in HUD
+  as "Scale · 1 unit ≈ X m/km"; cleared on map close
+- GeoJSON published to store.mapGeometry on draw events
+- VITE_MAPBOX_TOKEN from .env (never hardcoded; .env is git-ignored)
 
 
-LOCKING ARCHITECTURE (Design Intent)
---------------------------------------
-Lock regions are drawn as rectangles (marquee gesture). Visually they render as a
-flat semi-transparent light grey union fill (binary inside/outside via
-pointInPolygon — no feathering visible). However the underlying lockInfluenceAt()
-function computes a smooth distance-field falloff from the polygon boundary
-(influence 1.0 inside → 0.0 at featherRadius), which is used by the Normalize and
-Generate pipelines to gate which vertices may be moved.
+PHASE 2 — LLM GENERATE (Deferred)
+-----------------------------------
+Serialization infrastructure is built and ready (intentSerialization.ts,
+lockInfluenceAt, geoScale). The Generate pipeline itself:
 
-Intent Pins are spatial prompts — they do NOT freeze geometry. They mark
-programmatic intent across the canvas. Each pin emits a localized radial gradient
-field (metaball logic). When the Generate pipeline runs, it reads the pin spatial
-matrix alongside the lock influence field to determine what it can change, where
-to add density, where to route pedestrian paths, etc.
+  api/generate.ts — Vercel Edge Function proxying Anthropic API
+  System prompt encodes: LOCKED (influence 1.0) = fixed anchors,
+    TRANSITION (feather zone) = bend/attach, OPEN (influence 0) = free;
+    + intentMix spatial matrix per vertex/region
+  Returns new vector segments into the PSLG graph (never raster)
+  Reviewable layer: Accept merges, Reject discards, Snapshot before merge
 
-The two-layer system (geometric lock + programmatic intent) is what gives this
-tool its precision advantage over prompt-only generation.
+The serializer already produces the exact payload format Claude needs.
+Phase 2 activation = wire api/generate.ts + swap the Generate tab placeholder.
 
 
-NORMALIZATION (Current State)
-------------------------------
-Normalization is NOT automatic or ambient. It is selection-scoped and
-user-triggered: the user selects geometry with Marquee or Lasso, then
-right-clicks within the selection to trigger "Clean up" with a strength slider.
-
-Primitive fitting is implemented and unit-tested: line straightening, horizontal/
-vertical snap, circle, rectangle, triangle. Urban morphology extensions (corridor
-detection, convex polygon generalization, greenway smoothing) are planned but not
-yet activated in the UI.
-
-
-PHASE 2 — LLM GENERATE (Deferred, not yet built)
---------------------------------------------------
-The Generate pipeline will run as a Vercel Edge Function (api/generate.ts)
-proxying the Anthropic API. It will:
-  - Serialize the graph into LOCKED (influence 1.0), TRANSITION (feather zone),
-    and OPEN (influence 0) regions
-  - Attach the Intent Pin spatial matrix (type, radius, position, priority)
-  - Submit to Claude with a structured system prompt
-  - Return new vector segments into the graph (never raster)
-  - Surface a reviewable layer: Accept merges, Reject discards, Snapshot before merge
-
-This phase is intentionally deferred until the Phase 1 drawing + normalization +
-lock/intent pipeline is solid.
-
-
-COORDINATE SYSTEM NOTES (for LLM coding agents)
--------------------------------------------------
-- World space: origin (0,0) at page center, y-axis up, 1 unit = 1 screen pixel at zoom 1
-- Page bounds: x ∈ [-pageWidth/2, pageWidth/2], y ∈ [-pageHeight/2, pageHeight/2]
-- Export coordinate transforms: fx(x) = x + W/2, fy(y) = H/2 - y (top-left origin, y down)
-- Raycasting: an invisible InteractionPlane mesh follows the camera each frame
-  (useFrame), so e.point.x / e.point.y from R3F ThreeEvents are always in world space
-- Pan math: cam.position.x -= dx / cam.zoom; cam.position.y += dy / cam.zoom
-- Zoom anchoring: cursor world point is preserved across zoom by adjusting
-  cam.position after updating cam.zoom
-- getBoundingClientRect() is called live on gl.domElement for screen→world mapping;
-  no stale cached bounds
+COORDINATE SYSTEM (for coding agents)
+---------------------------------------
+- World origin (0,0) = page center; y up; 1 world unit = 1 screen pixel at zoom 1
+- Page bounds: x ∈ [-W/2, W/2], y ∈ [-H/2, H/2]
+- Export: fx(x) = x + W/2, fy(y) = H/2 - y
+- InteractionPlane (useFrame) gives world-space e.point.x/y on every tool event
+- Pan: cam.position.x -= dx / cam.zoom; cam.position.y += dy / cam.zoom
+- Zoom anchor: preserve cursor world point by adjusting cam.position post-zoom
+- getBoundingClientRect() called live on gl.domElement; never stale cached
+- Snap radius: SNAP_THRESHOLD_PX / camera.zoom → world units

@@ -1,4 +1,4 @@
-import type { SamplePoint } from '../../types/geometry'
+import type { LineStyle, SamplePoint } from '../../types/geometry'
 
 /**
  * Stroke rendering geometry (Tier 3 — derived cache).
@@ -266,4 +266,133 @@ export function buildPolylineRibbon(points: SamplePoint[]): {
   }
 
   return { positions: new Float32Array(pos), indices: new Uint32Array(idx) }
+}
+
+// ---- Line styles (drafting hierarchy, improvements C3) --------------------
+
+type Geometry = { positions: Float32Array | null; indices: Uint32Array | null }
+
+/**
+ * Dash pattern [onLength, offLength] in WORLD units for a style, proportional to
+ * the stroke width so the pattern stays balanced across weights and reads
+ * consistently at any zoom (dashes live in drawing units, like the line width
+ * itself). The SAME array drives the on-canvas geometry and the SVG/PNG/PDF
+ * exporters, so screen and file output match. `null` ⇒ solid (no dashing).
+ */
+export function dashArray(style: LineStyle | undefined, width: number): [number, number] | null {
+  const w = Math.max(width, 0.5)
+  switch (style) {
+    case 'dashed':
+      return [3.5 * w, 2.5 * w]
+    case 'long-dash':
+      return [7 * w, 3 * w]
+    case 'dotted':
+      return [Math.max(0.6 * w, 0.6), 1.8 * w]
+    default:
+      return null // 'solid' or undefined
+  }
+}
+
+function lerpSample(a: SamplePoint, b: SamplePoint, s: number): SamplePoint {
+  return { x: a.x + (b.x - a.x) * s, y: a.y + (b.y - a.y) * s, w: a.w + (b.w - a.w) * s }
+}
+
+/**
+ * Split a centerline polyline into the "on" sub-polylines of a dash pattern,
+ * walking cumulative arc length (world units) and interpolating a fresh point
+ * exactly at every dash boundary so dashes begin and end cleanly. Per-point
+ * half-width is interpolated too, so width is preserved across boundaries.
+ */
+export function splitByDash(points: SamplePoint[], pattern: [number, number]): SamplePoint[][] {
+  const [on, off] = pattern
+  const period = on + off
+  if (points.length < 2 || on <= 1e-6 || period <= 1e-6) return [points]
+
+  const runs: SamplePoint[][] = []
+  let state: 'on' | 'off' = 'on'
+  let remaining = on // length left in the current dash phase
+  let current: SamplePoint[] = [points[0]]
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y)
+    if (segLen < 1e-9) continue
+
+    let consumed = 0 // distance already walked along this segment
+    while (segLen - consumed > 1e-9) {
+      const step = Math.min(remaining, segLen - consumed)
+      consumed += step
+      remaining -= step
+      const pt = lerpSample(a, b, consumed / segLen)
+      if (state === 'on') current.push(pt)
+
+      if (remaining <= 1e-9) {
+        if (state === 'on') {
+          if (current.length >= 2) runs.push(current)
+          current = []
+          state = 'off'
+          remaining = off
+        } else {
+          state = 'on'
+          remaining = on
+          current = [pt] // start the next dash at this boundary
+        }
+      }
+    }
+  }
+
+  if (state === 'on' && current.length >= 2) runs.push(current)
+  return runs
+}
+
+/** Concatenate ribbon geometries into one buffer, offsetting indices per part. */
+function mergeGeometries(parts: Geometry[]): Geometry {
+  const valid = parts.filter((p): p is { positions: Float32Array; indices: Uint32Array } =>
+    p.positions !== null && p.indices !== null,
+  )
+  if (valid.length === 0) return { positions: null, indices: null }
+  if (valid.length === 1) return valid[0]
+
+  let vlen = 0
+  let ilen = 0
+  for (const p of valid) {
+    vlen += p.positions.length
+    ilen += p.indices.length
+  }
+  const positions = new Float32Array(vlen)
+  const indices = new Uint32Array(ilen)
+  let vo = 0
+  let io = 0
+  let base = 0
+  for (const p of valid) {
+    positions.set(p.positions, vo)
+    for (let i = 0; i < p.indices.length; i++) indices[io + i] = p.indices[i] + base
+    base += p.positions.length / 3
+    vo += p.positions.length
+    io += p.indices.length
+  }
+  return { positions, indices }
+}
+
+/**
+ * Build the renderable ribbon for a stroke, honoring its line style. Solid
+ * strokes go straight through the smooth (Catmull-Rom) or polyline builder;
+ * dashed/dotted strokes split the centerline by arc length and build one ribbon
+ * per dash, merged into a single mesh.
+ */
+export function buildStrokeGeometry(
+  points: SamplePoint[],
+  straight: boolean | undefined,
+  lineStyle: LineStyle | undefined,
+  strokeWidth: number,
+): Geometry {
+  const centerline = straight ? points : resampleCentripetalCatmullRom(points)
+  const builder = straight ? buildPolylineRibbon : buildRibbon
+
+  const pattern = dashArray(lineStyle, strokeWidth)
+  if (!pattern) return builder(centerline)
+
+  const runs = splitByDash(centerline, pattern)
+  return mergeGeometries(runs.map(builder))
 }

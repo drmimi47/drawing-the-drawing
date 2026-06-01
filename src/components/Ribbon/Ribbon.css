@@ -148,6 +148,17 @@
   margin: 3px 0;
 }
 
+/* ---- Pen (lineweight + style) preview swatch ---- */
+.rail-line-preview {
+  flex-shrink: 0;
+  color: var(--text);
+  overflow: visible;
+}
+
+.rail-float-item.is-active .rail-line-preview {
+  color: var(--accent);
+}
+
 /* ---- Color picker panel ---- */
 .rail-float-swatches {
   display: flex;

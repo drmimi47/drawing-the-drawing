@@ -3,7 +3,9 @@ import { useThree, type ThreeEvent } from '@react-three/fiber'
 import type { OrthographicCamera } from 'three'
 import { useDrawingStore } from '../store/drawingStore'
 import type { SamplePoint } from '../types/geometry'
+import type { SnapGuide } from '../types/geometry'
 import { SNAP_THRESHOLD_PX, type SnapPoint } from '../geometry/spatialIndex'
+import { checkParallelSnap, checkPerpendicularSnap } from '../geometry/snapMath'
 
 /**
  * Polyline tool (next to Draw). Click to drop straight-segment vertices; the
@@ -11,20 +13,28 @@ import { SNAP_THRESHOLD_PX, type SnapPoint } from '../geometry/spatialIndex'
  * Enter, or clicking near the first vertex (to close). Esc cancels. Committed as
  * a `straight` stroke so corners stay sharp (no Catmull-Rom smoothing).
  *
- * Snapping: the cursor is continuously tested against the spatial index of
- * existing vertices + edge midpoints. A target within SNAP_THRESHOLD_PX locks the
- * cursor exactly onto it (CAD object-snap) and surfaces an indicator. Object snap
- * takes priority over Shift-ortho — snapping to a real point is the stronger
- * intent.
+ * SNAPPING — priority matrix (highest wins, evaluated each pointer-move):
+ *   P1  Endpoint   — cursor within SNAP_THRESHOLD_PX of an existing vertex or
+ *                    edge midpoint; locks exactly to it. (unchanged from before)
+ *   P2  Perpendicular — when a polyline session is active (≥1 vertex placed),
+ *                    the segment P→cursor is perpendicular to a nearby edge;
+ *                    cursor is locked to the foot of perpendicular on the line
+ *                    through P that is ⊥ to that edge.
+ *   P3  Parallel   — when a polyline session is active, the segment P→cursor
+ *                    is parallel (within PARALLEL_THRESHOLD_RAD) to a nearby
+ *                    edge; cursor is projected onto the parallel ray from P.
  *
- * Holding Shift (when nothing is snapped) constrains the segment to an orthogonal
- * (H/V) axis. The preview reacts immediately to Shift being pressed or released —
- * even with the pointer stationary — because the raw cursor is stored and the
- * constraint is derived from the live `isShiftPressed` state. Pointer moves are
- * coalesced into one update per frame via requestAnimationFrame.
+ * P2/P3 only fire when `pointsRef.current.length > 0` — the freehand DRAW tool
+ * has a completely separate code path and is unaffected.
+ *
+ * Holding Shift (when nothing is snapped) constrains the segment to an
+ * orthogonal (H/V) axis. Shift-ortho is skipped when an advanced snap (P2/P3)
+ * is active because the snap already represents a stronger geometric constraint.
  */
 
-const CLOSE_DIST = 10 // world units near the first vertex counts as "close"
+const CLOSE_DIST = 10
+const PERP_THRESHOLD_MULT = 2.5   // perp snap radius = endpoint radius × this
+const PARALLEL_THRESHOLD_RAD = 6 * (Math.PI / 180)  // 6° angular tolerance
 
 /** Snap a point to a horizontal/vertical line through the anchor (Shift). */
 function snapOrtho(anchor: { x: number; y: number }, p: { x: number; y: number }) {
@@ -33,6 +43,131 @@ function snapOrtho(anchor: { x: number; y: number }, p: { x: number; y: number }
   return Math.abs(dx) >= Math.abs(dy) ? { x: p.x, y: anchor.y } : { x: anchor.x, y: p.y }
 }
 
+// ---------------------------------------------------------------------------
+// Snap priority matrix — module-level pure function (no hooks).
+// Reads the Zustand spatial index via getState(), consistent with the existing
+// onPointerDown pattern, so it's safe to call from event handlers and RAF
+// callbacks (never during render).
+// ---------------------------------------------------------------------------
+
+interface SnapResult {
+  /** Effective cursor position — already at the snapped coordinate. */
+  pos: { x: number; y: number }
+  /** Endpoint snap target (drives the existing blue SnapIndicator glyph). */
+  snapTarget: SnapPoint | null
+  /** Guide metadata for the Step-3 overlay renderer. */
+  guide: SnapGuide | null
+  /** True when P2 or P3 snap is active — suppresses Shift-ortho. */
+  isAdvanced: boolean
+}
+
+function resolveSnap(
+  raw: { x: number; y: number },
+  pts: { x: number; y: number }[],
+  zoom: number,
+): SnapResult {
+  const { spatialIndex } = useDrawingStore.getState()
+  const snapRadiusW = SNAP_THRESHOLD_PX / zoom
+
+  // ── Priority 1: endpoint snap ───────────────────────────────────────────
+  const ep = spatialIndex.nearest(raw.x, raw.y, snapRadiusW)
+  if (ep) {
+    const guide: SnapGuide | null =
+      pts.length > 0
+        ? {
+            type: 'endpoint',
+            fromPoint: [pts[pts.length - 1].x, pts[pts.length - 1].y],
+            toPoint: [ep.x, ep.y],
+            sourceVertexId: ep.vid ?? undefined,
+          }
+        : null
+    return { pos: { x: ep.x, y: ep.y }, snapTarget: ep, guide, isAdvanced: false }
+  }
+
+  // ── Priorities 2 & 3: require an active polyline session ────────────────
+  if (pts.length > 0) {
+    const P = pts[pts.length - 1]
+    const perpThresh = (SNAP_THRESHOLD_PX * PERP_THRESHOLD_MULT) / zoom
+    const candidates = spatialIndex.nearbyEdgeEndpoints(raw.x, raw.y)
+
+    // ── Priority 2: perpendicular snap ──────────────────────────────────
+    // Pick the candidate edge whose perp-line foot is closest to M.
+    let bestPerpDist = perpThresh
+    let bestPerpPos: { x: number; y: number } | null = null
+    let bestPerpEdgeKey: string | null = null
+    for (const { key, a, b } of candidates) {
+      const foot = checkPerpendicularSnap(P, raw, a, b, perpThresh)
+      if (foot) {
+        const d = Math.hypot(raw.x - foot.x, raw.y - foot.y)
+        if (d < bestPerpDist) {
+          bestPerpDist = d
+          bestPerpPos = foot
+          bestPerpEdgeKey = key
+        }
+      }
+    }
+    if (bestPerpPos) {
+      return {
+        pos: bestPerpPos,
+        snapTarget: null,
+        guide: {
+          type: 'perpendicular',
+          fromPoint: [P.x, P.y],
+          toPoint: [bestPerpPos.x, bestPerpPos.y],
+          sourceEdgeId: bestPerpEdgeKey ?? undefined,
+        },
+        isAdvanced: true,
+      }
+    }
+
+    // ── Priority 3: parallel snap ────────────────────────────────────────
+    // Pre-compute normalized P→M direction once; skip if cursor == P.
+    const vx = raw.x - P.x
+    const vy = raw.y - P.y
+    const vLen = Math.sqrt(vx * vx + vy * vy)
+    if (vLen > 1e-10) {
+      const vnx = vx / vLen
+      const vny = vy / vLen
+      let bestCross = Math.sin(PARALLEL_THRESHOLD_RAD)
+      let bestParallelPos: { x: number; y: number } | null = null
+      let bestParallelEdgeKey: string | null = null
+      for (const { key, a, b } of candidates) {
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const dLen = Math.sqrt(dx * dx + dy * dy)
+        if (dLen < 1e-10) continue
+        // |sin θ| between P→M and edge direction — ranks angular deviation
+        const cross = Math.abs((dx / dLen) * vny - (dy / dLen) * vnx)
+        if (cross < bestCross) {
+          const pt = checkParallelSnap(P, raw, a, b, PARALLEL_THRESHOLD_RAD)
+          if (pt) {
+            bestCross = cross
+            bestParallelPos = pt
+            bestParallelEdgeKey = key
+          }
+        }
+      }
+      if (bestParallelPos) {
+        return {
+          pos: bestParallelPos,
+          snapTarget: null,
+          guide: {
+            type: 'parallel',
+            fromPoint: [P.x, P.y],
+            toPoint: [bestParallelPos.x, bestParallelPos.y],
+            sourceEdgeId: bestParallelEdgeKey ?? undefined,
+          },
+          isAdvanced: true,
+        }
+      }
+    }
+  }
+
+  return { pos: raw, snapTarget: null, guide: null, isAdvanced: false }
+}
+
+// ---------------------------------------------------------------------------
+
 export function usePolyline() {
   const { camera } = useThree()
   const baseWidth = useDrawingStore((s) => s.baseWidth)
@@ -40,22 +175,30 @@ export function usePolyline() {
   const commitStroke = useDrawingStore((s) => s.commitStroke)
 
   const [points, setPoints] = useState<{ x: number; y: number }[]>([])
-  // Raw (un-snapped) cursor; ortho/snap are applied at render time.
+  // Raw (un-snapped) cursor position from the last pointer-move event.
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null)
-  // Active snap target under the cursor (drives both the cursor lock + indicator).
+  // Active endpoint snap target (drives the blue SnapIndicator glyph).
   const [snap, setSnap] = useState<SnapPoint | null>(null)
+  // True when P2/P3 snap is active — suppresses Shift-ortho in the preview.
+  const [isAdvancedSnap, setIsAdvancedSnap] = useState(false)
   const [isShiftPressed, setIsShiftPressed] = useState(false)
   const pointsRef = useRef<{ x: number; y: number }[]>([])
 
-  // Coalesce pointer moves into one cursor+snap update per animation frame.
+  // Coalesce pointer moves into one update per animation frame.
   const cursorRef = useRef<{ x: number; y: number } | null>(null)
   const snapRef = useRef<SnapPoint | null>(null)
+  const snapGuideRef = useRef<SnapGuide | null>(null)
+  const isAdvancedSnapRef = useRef(false)
   const rafRef = useRef(0)
+
   const flushCursor = useCallback(() => {
     rafRef.current = 0
     setCursor(cursorRef.current)
     setSnap(snapRef.current)
+    setIsAdvancedSnap(isAdvancedSnapRef.current)
+    useDrawingStore.getState().setSnapGuide(snapGuideRef.current)
   }, [])
+
   const scheduleCursor = useCallback(() => {
     if (!rafRef.current) rafRef.current = requestAnimationFrame(flushCursor)
   }, [flushCursor])
@@ -65,8 +208,12 @@ export function usePolyline() {
     setPoints([])
     setCursor(null)
     setSnap(null)
+    setIsAdvancedSnap(false)
     cursorRef.current = null
     snapRef.current = null
+    snapGuideRef.current = null
+    isAdvancedSnapRef.current = false
+    useDrawingStore.getState().setSnapGuide(null)
   }, [])
 
   const finish = useCallback(() => {
@@ -81,9 +228,8 @@ export function usePolyline() {
 
   const cancel = useCallback(() => reset(), [reset])
 
-  // Dual event listening: keys drive both control flow and the Shift snap state.
-  // Toggling Shift updates isShiftPressed, which re-renders the preview from the
-  // current cursor immediately — no pointer move required.
+  // Key handling: Shift state (preview reacts immediately on hold/release without
+  // needing a pointer move) and Enter/Esc control flow.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Shift') {
@@ -117,12 +263,18 @@ export function usePolyline() {
       if (e.nativeEvent.button !== 0) return
       const pts = pointsRef.current
       const zoom = (camera as OrthographicCamera).zoom || 1
-      let p = { x: e.point.x, y: e.point.y }
-      // Object snap (existing vertex/midpoint) wins; else Shift-ortho off the
-      // previous vertex.
-      const sp = useDrawingStore.getState().spatialIndex.nearest(p.x, p.y, SNAP_THRESHOLD_PX / zoom)
-      if (sp) p = { x: sp.x, y: sp.y }
-      else if (e.nativeEvent.shiftKey && pts.length > 0) p = snapOrtho(pts[pts.length - 1], p)
+      const raw = { x: e.point.x, y: e.point.y }
+
+      // Run the full priority matrix at click time (not just the last move result)
+      // so the committed vertex is at the precise snapped coordinate.
+      const { pos, snapTarget, isAdvanced } = resolveSnap(raw, pts, zoom)
+
+      // Shift-ortho only when no geometric snap constrained the position.
+      let p = pos
+      if (!snapTarget && !isAdvanced && e.nativeEvent.shiftKey && pts.length > 0) {
+        p = snapOrtho(pts[pts.length - 1], pos)
+      }
+
       // Click near the first vertex closes the polyline.
       if (pts.length >= 2 && Math.hypot(p.x - pts[0].x, p.y - pts[0].y) <= CLOSE_DIST) {
         pointsRef.current = [...pts, { ...pts[0] }]
@@ -139,10 +291,15 @@ export function usePolyline() {
     (e: ThreeEvent<PointerEvent>) => {
       const zoom = (camera as OrthographicCamera).zoom || 1
       const raw = { x: e.point.x, y: e.point.y }
-      // Probe for a snap target so the indicator shows on hover (even before the
-      // first vertex is placed).
-      snapRef.current = useDrawingStore.getState().spatialIndex.nearest(raw.x, raw.y, SNAP_THRESHOLD_PX / zoom)
-      cursorRef.current = raw
+      // Run full snap pipeline; store results in refs to be flushed by RAF.
+      // Note: for P2/P3 snaps, result.pos is the snapped position (not raw),
+      // so the existing effCursor logic in the preview path works without
+      // additional changes — it just reads `cursor` which becomes the snap pos.
+      const result = resolveSnap(raw, pointsRef.current, zoom)
+      cursorRef.current = result.pos
+      snapRef.current = result.snapTarget
+      snapGuideRef.current = result.guide
+      isAdvancedSnapRef.current = result.isAdvanced
       scheduleCursor()
     },
     [scheduleCursor, camera],
@@ -151,15 +308,16 @@ export function usePolyline() {
   const onPointerUp = useCallback(() => {}, [])
   const onDoubleClick = useCallback(() => finish(), [finish])
 
-  // Live preview = committed vertices + the rubber-band point to the cursor.
-  // Effective cursor: snap target wins, else Shift-ortho off the last vertex,
-  // else the raw cursor.
+  // Live preview = committed vertices + rubber-band to effective cursor.
+  // effCursor priority: endpoint snap > advanced snap (already in cursor) > shift-ortho > raw.
   const half = baseWidth / 2
   const last = points[points.length - 1]
   let effCursor = cursor
   if (cursor) {
     if (snap) effCursor = { x: snap.x, y: snap.y }
-    else if (isShiftPressed && last) effCursor = snapOrtho(last, cursor)
+    // When an advanced (perp/parallel) snap is active, cursor already holds
+    // the snapped position — skip Shift-ortho so it doesn't fight the snap.
+    else if (!isAdvancedSnap && isShiftPressed && last) effCursor = snapOrtho(last, cursor)
   }
   const rawPts = effCursor && points.length > 0 ? [...points, effCursor] : points
   const preview: SamplePoint[] = rawPts.map((p) => ({ x: p.x, y: p.y, w: half }))

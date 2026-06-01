@@ -1,207 +1,88 @@
-MASTER PLAN — "Dynamic Trace Paper"
+METABALL SKETCH — Master Plan
 ================================================================================
-A sketch-to-plan ideation tool for architects and urban designers working on
-early-stage site layout, massing, and zoning alternatives. Designers draw rough
-freehand geometry, clean it into legible linework, lock/approve what works, and
-(later) generate alternatives under those constraints. Output is purely vector,
-returning into a clean structural graph — never a flattened raster.
+A sketch-to-plan ideation tool for architects. Designer draws rough geometry,
+normalizes it, locks regions + drops intent pins, then an LLM generates vector
+alternatives under those spatial constraints. Output is always PSLG vectors.
 
-Mental model:  SKETCH → DECREE INTENT (locks + intent fields) → RESOLVE.
-  - "Clean up" resolves geometry toward geometric intent (primitives / morphology).
-  - "Generate" (Phase 2, LLM) resolves toward programmatic intent (the intent fields).
-  Both are gated by the same spatial fields. Locks freeze; intent pins steer.
-
-Derived from plan_final_v4. This document is the build-ready version: same vision,
-but sequenced so each piece ships and verifies on its own, with the LLM deferred.
-
-
-HOW THIS PLAN DIFFERS FROM v4 (read first)
-------------------------------------------
-1. LLM IS DEFERRED to Phase 2. Nothing in Phase 1 calls a network model. The whole
-   Generate pipeline (serialization, validation, accept/reject preview) is built and
-   tested in Phase 1 against a DETERMINISTIC STUB generator; only the final swap to
-   the Anthropic API is Phase 2. This keeps momentum and avoids LLM rabbit-holes.
-2. The two heavy clusters (Hybrid Fields, Generate) are DECOMPOSED into small steps,
-   each compileable and verifiable, so we don't overcomplicate or rush.
-3. Normalize's "Urban Morphology Engine" is staged as incremental additions on top of
-   the existing primitive fitter — not a big-bang rewrite.
-4. The v4 data model (isContext, LockPolygon, IntentPin) is adopted now, because the
-   field work depends on it.
-
-DECISION TO CONFIRM: v4's status line says circle/triangle recognition was omitted,
-but the current code HAS line/H-V/circle/triangle/rectangle fitting (unit-tested).
-Recommendation: keep them as general primitives but DEPRIORITIZE; let urban
-morphology (corridors / convex blocks / greenways) lead. They can be gated off in the
-"Clean up" options if they prove noisy for plan drawing. (No code deletion required.)
-
-
-WORKFLOW (guided, non-modal loop)
----------------------------------
-1. SKETCH       Freehand draw rough geometry (or trace an underlay).
-2. NORMALIZE    "Clean up" morphs rough strokes into clean primitives + urban
-                morphology (lines, H-V, corridors, convex blocks, greenways).
-                Preview → accept/reject.
-3. LOCK/INTENT  Lasso regions to freeze (feathered falloff); drop Intent Pins to tag
-                programmatic intent. Locks gate normalize + generate; pins steer generate.
-4. GENERATE     (PHASE 2) Vector inpainting: locked = fixed anchors, feathered = bend/
-                attach zone, open = free; steered by intent pins. Reviewable vector layer.
-
-Loop: sketch ⇄ normalize ⇄ lock/intent ⇄ generate, in any order.
-
-
-DESIGN PRINCIPLES (non-negotiable)
-----------------------------------
-- Deliberate, never ambient: transforms run on explicit command / chosen region —
-  never as a side effect of panning. (The old pan-driven morph is retired.)
-- Transforms only touch UNLOCKED geometry.
-- Non-destructive: every action reversible; version history is core.
-- Predictable field view: always show what is frozen, feathered, or targeted.
-- Editable end-to-end: generation returns vectors into the graph, never raster.
-- Context vs. sketch: imported background geometry (GIS / site boundaries / drawings)
-  is read-only (isContext) and acts as permanent immutable anchors.
-- Vector-control toggle: a switch puts strokes into editable-vector mode (move/reshape
-  control points), distinct from freehand draw.
-
-
-POSITIONING (honest scope)
---------------------------
-Early ideation: napkin sketch → legible diagram → alternatives. Opposite end of the
-pipeline from Bluebeam Revu (precision markup/takeoff on finished PDFs); this AIDS that
-flow as an ideation front-end that hands off to Bluebeam / CAD. Interop matters (import
-PDF/image/GIS underlay to trace; export SVG/PDF/PNG, DXF later). Real-world scale
-("set scale by reference") is deferred.
-
-
-CORE DATA MODEL (adopt now)
----------------------------
-Editable model = planar graph of vertices + edges (PSLG), the source of truth — not a
-Bezier/spline truth (curves are an optional layer that tessellates down). Render = cache.
-
-  RawSample   { x, y, pressure, t }                       retained per stroke
-  Vertex      { id, x, y, isContext: boolean }            shared at intersections; immutable bg flag
-  PathPoint   { v: vertexId, w }                          per-stroke half-width
-  Stroke      { id, color, path: PathPoint[], raw? }      ordered path through vertices
-  Edge        { id, strokeId, v0, v1 }                    derived
-  Graph       { vertices: Record<id,Vertex>, strokes: Stroke[] }
-  LockPolygon { id, points: {x,y}[], featherRadius }      hard + feathered geometric lock
-  IntentPin   { id, x, y, radius, intentType, value }     spatial prompt tag (steers generate)
-  Snapshot    { timestamp, graph }                        version history
-
-Render (Tier 3): centripetal Catmull-Rom resample per path → variable-width ribbon with
-round caps; rebuilt from the graph. Crossing strokes insert ONE shared vertex into both.
-
-Tool enum:  'DRAW' | 'ERASE' | 'PAN' | 'LASSO_LOCK' | 'INTENT_PIN'
-Stage enum: 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
-
-
-TECH STACK
-----------
-TypeScript · React · Zustand · React Three Fiber + Three.js (WebGL) · Vite · GitHub ·
-Vercel (Edge Function — Phase 2 only). Custom shaders for the feathered poly-field and
-intent metaball fields. lucide-react for icons.
-
-
-STATUS — DONE (Clusters A–F)
-----------------------------
-Scaffold + R3F canvas; freehand drawing (pressure, color, undo); infinite pan/zoom;
-geometry graph with intersection-splitting + smooth ribbon rendering; eraser (swept-
-capsule, stress-tested); viewport observer + debug boundary overlay; Normalization
-primitive fitting (line/H-V/circle/triangle/rectangle), unit-tested.
-Carry-over change: RETIRE the ambient pan-driven morph (done conceptually; remove/gate
-in Cluster G so geometry never changes on pan).
-
-*normalization is never global. it only can happen within lasso/marquee selection after user selects
-"normalize" after right clicking within lasso. 
-
-================================================================================
-PHASE 1 — NON-LLM FOUNDATION  (build this now, in order)
-================================================================================
-
-CLUSTER G — Workflow orchestration + explicit "Clean up" *done
-  G1 [ ] Stage state ('SKETCH'|'NORMALIZE'|'LOCK_INTENT'|'GENERATE') + top-center stage
-         indicator surfacing the current stage's primary action. Non-modal.
-  G2 [ ] Selection: marquee + lasso to select a set of strokes (selection state in store).
-  G3 [ ] "Normalize" command on geometry (selection-scoped), with a
-         strength slider. uses existing normalizeStroke. 
-  G4 [ ] Retire ambient pan-morph: geometry must not change on pan/zoom *delete this code. user can trigger normalization by 
-  right clicking within the lasso/marquee to normalize the geometry inside only. 
-  G5 [ ] (After G1–G4) Vector-control toggle: editable-vector mode to drag vertices.
-  * Verify: pan never mutates geometry; Clean up previews and commits only on Accept;
-    Cancel restores exactly; a selection limits the effect to chosen strokes.
-
-CLUSTER H — Hybrid Fields  (decomposed — do not bundle) *done
-  H1 [ ] LockPolygon data structure + LASSO_LOCK tool (new tool on toolbar): draw/close a polygon; store it.
-  H2 [ ] Hard lock: point-in-polygon → influence 1.0 inside. Wire into Clean up (skip
-         influence-1 vertices). Verify locked strokes are untouched. (No feather yet.)
-  H3 [ ] Feathered falloff: analytical distance-to-polygon field; influence slopes 1.0→0.0
-         across featherRadius. Clean-up effect scales by (1 - influence).
-  H4 [ ] Lock-field shader: crisp polygon border + outward neon glow over the feather zone.
-  H5 [ ] IntentPin tool + data: place pins; edit properties (density / pedestrian flow /
-         SQF priority / land-use). Pins do NOT freeze geometry, they are setting up giving context
-         to LLM to understand what the drawn lines and spatial geometry means. 
-         these properites will be placeholds for now. when user clicks pin icon a list should appear 
-         over the tool button with a list of placeholder pin types. 
-  H6 [ ] IntentPin metaball field + color-coded shader (overlapping land-use profiles).
-  * Verify: Clean up fully bypasses influence-1 vertices and scales by falloff elsewhere;
-    lock + intent fields render clearly at 60 FPS. (Pins are data+visual only until Phase 2.)
-
-CLUSTER J — Version history & non-destructive iteration *done
-  [ ] Snapshot graph before each transform (cap ~200); undo/redo across transforms;
-      restore-version affordance; optional trace-paper overlay of stacked snapshots.
-  * Verify: any transform reverts; restoring a version reproduces it exactly.
-
-CLUSTER K — Interop & handoff *done
-  [ ] Import PDF/image/GIS as a dimmed read-only underlay; tag imported vertices isContext=true.
-  [ ] Export SVG + PDF + PNG (DXF later).
-  [ ] The default artboard/canvas should change to the imported pdf/image/gis page size. 
-  [ ] (Deferred) set-scale-by-reference.
-  * Verify: trace an imported plan and export vectors that open cleanly in Bluebeam / CAD.
-
-CLUSTER N — Normalize: Urban Morphology Engine  (incremental; each step standalone) *done-ish
-  N1 [ ] Parallel-corridor detection: near-parallel dual paths (or a single path tagged
-         as a corridor) → clean parallel ribbon centerline.
-  N2 [ ] Convex polygon: generalize rectangle fitting to clean convex N-gon parcels/blocks.
-  N3 [ ] Meandering polyline: open flowing contour → smoothed greenway (NOT snapped to a
-         rigid primitive).
-  N4 [ ] Offset Assist: expand a normalized centerline into a parallel road/corridor ribbon
-         at a chosen width.
-  N5 [ ] Draw-Assist / hold-to-snap: pause at stroke end to snap to line/corridor primitive.
-  * Verify (per step): each morphology type has a unit test (rough input → expected clean
-    output) mirroring the existing normalize tests; no regression in line/H-V/rectangle.
+Mental model:  SKETCH → LOCK/INTENT → GENERATE
+  "Clean up" resolves geometry toward geometric intent (primitives / morphology).
+  "Generate" (Phase 2) resolves toward programmatic intent (the intent fields).
+  Locks freeze geometry; intent pins steer generation.
 
 
 ================================================================================
-PHASE 2 — LLM GENERATION  (deferred; build last)
+PHASE 1 — COMPLETE
 ================================================================================
-Pre-work P1–P3 is non-LLM and safe to build during Phase 1 if convenient; the actual
-model call (I) is the only true LLM dependency.
 
-  P1 [ ] Serialization (pure fn, unit-tested, NO network): split the graph into
-         LOCKED (influence 1.0 / isContext), TRANSITION (0<influence<1, the feather zone),
-         and OPEN (influence 0); attach the Intent Pin spatial matrix (params → coords).
-  P2 [ ] Graph Validation Guard (pure fn, unit-tested): strip self-intersections,
-         overlapping/collinear paths, and degenerate topologies from a candidate segment set.
-  P3 [ ] Reviewable-layer plumbing with a STUB generator: a deterministic local
-         "completer" (e.g. extend dangling segments, close near-enclosures) feeds the
-         accept/reject preview. Proves the full pipeline without any model.
+ALL of the following has been implemented and is working:
 
-  CLUSTER I — Real Generate (LLM)
-  I1 [ ] api/generate.ts: Vercel Edge Function proxying the Anthropic API (key server-side).
-  I2 [ ] System prompt: keep locked geometry exact; attach within the feather zone; lay out
-         programmatic additions in open regions honoring nearby intent params.
-  I3 [ ] Swap the P3 stub for the live call; run returned vectors through the P2 guard;
-         animate the reviewable layer in; accept merges, reject discards; snapshot before merge.
-  * Verify: Generate respects locked boundaries, anchors smoothly in the feather zone,
-    builds features matching intent tags, and never breaks planar-graph topology.
+CANVAS & TOOLS
+  ✓ R3F orthographic scene, white page sheet on light grey (#eef0f3) workspace
+  ✓ Pan (middle-click / Space+drag), zoom (scroll, cursor-anchored), undo/redo
+  ✓ Single-row compact tool rail (46px) replacing old two-row ribbon
+  ✓ Freehand Draw — uniform weight, Catmull-Rom smooth, round caps
+  ✓ Polyline — straight segments, miter joins, Shift-ortho, object snap
+  ✓ Erase — swept-capsule, splits strokes at intersections
+  ✓ Pan tool, Text tool, Vector Edit tool
+  ✓ Full-viewport crosshair (rAF + translate3d, GPU-accelerated)
+
+GEOMETRY GRAPH (PSLG)
+  ✓ Planar graph as source of truth; strokes share vertices at crossings
+  ✓ Spatial hash grid auto-rebuilt on every graph change (O(1) snap queries)
+  ✓ CAD object snap: vertex (□) and midpoint (△) indicators, 8px threshold
+  ✓ Vector Edit snaps dragged vertex to neighbors (excludes self)
+
+NORMALIZATION
+  ✓ Marquee + Lasso selection (segments strokes at boundary)
+  ✓ Right-click → "Clean up" with strength slider (selection-scoped only)
+  ✓ Primitives: line straighten, H/V snap, circle, rectangle, triangle
+  ✓ Vertex movement gated by lockInfluenceAt() falloff
+
+LOCKING & INTENT PINS
+  ✓ Lock Region: rectangle drag → feathered distance-field lock polygon
+  ✓ Lock visualization: gradient falloff rendering (reflects actual AI zone)
+  ✓ Intent Pin: Density / Pedestrian flow / SQF priority / Land use
+  ✓ Isolated Wyvill metaball fields per type (no cross-type bleeding)
+  ✓ Multi-channel GLSL shader: concentration-blended colors, single draw call
+  ✓ Hover concentration grid: exact % mix per region cell (accurate data)
+  ✓ Per-type isoline extraction (marching squares, INTENT_ISO_LEVEL = 0.15)
+  ✓ Multi-channel LLM serializer: intentMix per vertex + region (Phase 2 ready)
+
+IMPORT / EXPORT
+  ✓ PDF / image import as underlay (own transform, page frame independent)
+  ✓ Export SVG, PNG (2×), PDF
+  ✓ Mapbox GL JS geospatial overlay (lazy-loaded)
+  ✓ Live scale calibration: metersPerWorldUnit from Mercator projection
+  ✓ Turf.js live measurements in HUD
 
 
-CLUSTER L — Polish, hotkeys, deploy  (final)
-  [ ] Hotkeys (tools, stage action, undo/redo); tablet pressure; perf guard for large
-      graphs (avoid full re-tessellation each transform frame); Vercel prod deploy.
-  * Verify: full sketch → clean up → lock/intent → (generate) → export loop at 60 FPS; URL live.
+================================================================================
+PHASE 2 — LLM GENERATE (next)
+================================================================================
 
+The serialization infrastructure is already built. What remains:
 
-BUILD ORDER (one line)
-----------------------
-G → H → (J, K, N can interleave) → P1–P3 → I → L.
-Next up: CLUSTER G. Do NOT start any LLM/network work until Phase 1 + P1–P3 are solid.
+  1. api/generate.ts — Vercel Edge Function proxying Anthropic API (server-side
+     key). Receives: PSLG graph + lockInfluence field + intentMix spatial matrix.
+
+  2. System prompt — encodes:
+       LOCKED (influence 1.0)   = fixed anchors, do not move
+       TRANSITION (0 < inf < 1) = feather zone, bend/attach here
+       OPEN (influence 0)       = free to generate
+       intentMix per vertex/region = programmatic intent (density, pedestrian, etc.)
+
+  3. Parametric return format — Claude returns structured parameters / layout
+     rules, NOT raw coordinates. A local TypeScript layout engine interprets
+     these rules and writes mathematically precise vertices back into the PSLG
+     (avoids token-limit blowout and coordinate hallucination).
+
+  4. Reviewable layer — vector diff displayed before committing:
+       Accept → merges into graph + snapshot
+       Reject → discards; graph unchanged
+
+  5. Generate tab activation — swap the ribbon placeholder for the live UI.
+
+NOTE: The serializer (io/intentSerialization.ts) already produces the correct
+intentMix payload. lockInfluenceAt() already partitions vertices by zone.
+metersPerWorldUnit already provides real-world scale context. Phase 2 is
+primarily the Edge Function + prompt engineering + the layout interpreter.

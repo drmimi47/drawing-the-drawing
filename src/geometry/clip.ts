@@ -115,7 +115,14 @@ export function segmentStrokesByPolygon(
         return { v: id, w: sp.w }
       })
       const id = newId('s')
-      strokes.push({ id, color: stroke.color, path, straight: stroke.straight })
+      strokes.push({
+        id,
+        color: stroke.color,
+        path,
+        straight: stroke.straight,
+        strokeWidth: stroke.strokeWidth,
+        lineStyle: stroke.lineStyle,
+      })
       if (run.inside) insideStrokeIds.push(id)
     }
   }
