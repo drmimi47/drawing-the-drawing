@@ -62,14 +62,37 @@ export interface Graph {
 }
 
 /**
- * A geometric lock region (Cluster H). Geometry strictly inside the polygon is
- * frozen (influence 1.0); outside, influence falls off linearly to 0 across
+ * A geometric lock region (Cluster H). Influence is an interior distance field:
+ * hard-locked (1.0) deep in the core, fading to 0 at the boundary across
  * `featherRadius` — a soft "negotiation" boundary for normalize/generate.
  */
 export interface LockPolygon {
   id: string
   points: { x: number; y: number }[]
   featherRadius: number
+}
+
+/** Programmatic intent categories an Intent Pin can carry (Cluster H). */
+export type IntentType = 'DENSITY' | 'PEDESTRIAN' | 'SQF' | 'LANDUSE'
+
+/** Display label + field color per intent type. */
+export const INTENT_META: Record<IntentType, { label: string; color: string }> = {
+  DENSITY: { label: 'Density', color: '#8b5cf6' },
+  PEDESTRIAN: { label: 'Pedestrian Flow', color: '#1f9d55' },
+  SQF: { label: 'SQF Priority', color: '#e8852b' },
+  LANDUSE: { label: 'Land Use', color: '#2f6fed' },
+}
+
+/**
+ * An intent pin (Cluster H). A spatial prompt that does NOT freeze geometry; it
+ * emits a soft influence field used (in Phase 2) to steer generation locally.
+ */
+export interface IntentPin {
+  id: string
+  x: number
+  y: number
+  radius: number
+  intentType: IntentType
 }
 
 export const emptyGraph = (): Graph => ({ vertices: {}, strokes: [] })

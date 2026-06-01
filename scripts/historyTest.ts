@@ -44,6 +44,20 @@ check('locks preserved through stroke undo', s().lockPolygons.length === 1)
 s().redo()
 check('redo restores stroke', s().graph.strokes.length === 1)
 
+// Intent pin: place via the pending flow, then undo/redo.
+s().beginPin(200, 200, 0, 0)
+s().setPinType('DENSITY')
+s().setPinRadius(50)
+s().commitPin()
+check('pin placed', s().intentPins.length === 1 && s().pendingPin === null)
+check('placed pin keeps type + radius', s().intentPins[0].intentType === 'DENSITY' && s().intentPins[0].radius === 50)
+s().undo()
+check('undo removes pin', s().intentPins.length === 0)
+s().redo()
+check('redo restores pin', s().intentPins.length === 1)
+s().cancelPin() // no-op (nothing pending) — should not throw
+check('cancelPin with nothing pending is safe', s().pendingPin === null)
+
 // revertHistory pops without creating a redo entry
 s().beginHistory()
 s().addLock({ points: square, featherRadius: 40 }) // (this pushes its own history)

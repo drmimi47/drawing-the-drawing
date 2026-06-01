@@ -3,6 +3,7 @@ import { CanvasScene } from './components/Canvas'
 import { Toolbar } from './components/Toolbar'
 import { StageIndicator } from './components/Toolbar/StageIndicator'
 import { NormalizeMenu } from './components/Toolbar/NormalizeMenu'
+import { IntentPinMenu } from './components/Toolbar/IntentPinMenu'
 import { useDrawingStore } from './store/drawingStore'
 
 export default function App() {
@@ -36,6 +37,7 @@ export default function App() {
       <StageIndicator />
       <Toolbar />
       <NormalizeMenu />
+      <IntentPinMenu />
     </div>
   )
 }

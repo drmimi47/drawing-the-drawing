@@ -8,11 +8,13 @@ import { useEraser } from '../../hooks/useEraser'
 import { useSelection } from '../../hooks/useSelection'
 import { useVectorEdit } from '../../hooks/useVectorEdit'
 import { useLockTool } from '../../hooks/useLockTool'
+import { useIntentPinTool } from '../../hooks/useIntentPinTool'
 import { resolveStrokePoints } from '../../geometry/graph'
 import type { Graph, SamplePoint, Stroke } from '../../types/geometry'
 import { buildRibbon, resampleCentripetalCatmullRom } from './strokeGeometry'
 import { MarchingAntsLine } from './MarchingAntsLine'
 import { LockFieldView } from './LockFieldView'
+import { IntentFieldView } from './IntentFieldView'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
@@ -117,6 +119,8 @@ export function DrawingLayer() {
   const toolMode = useDrawingStore((s) => s.toolMode)
   const selectedStrokeIds = useDrawingStore((s) => s.selectedStrokeIds)
   const lockPolygons = useDrawingStore((s) => s.lockPolygons)
+  const intentPins = useDrawingStore((s) => s.intentPins)
+  const pendingPin = useDrawingStore((s) => s.pendingPin)
   const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
 
   const draw = useDrawing()
@@ -124,6 +128,7 @@ export function DrawingLayer() {
   const selection = useSelection()
   const vectorEdit = useVectorEdit()
   const lockTool = useLockTool()
+  const intentPinTool = useIntentPinTool()
 
   const selectedSet = useMemo(() => new Set(selectedStrokeIds), [selectedStrokeIds])
 
@@ -133,6 +138,7 @@ export function DrawingLayer() {
       toolMode === 'ERASE' ||
       toolMode === 'VECTOR' ||
       toolMode === 'LASSO_LOCK' ||
+      toolMode === 'INTENT_PIN' ||
       isSelectionTool) &&
     !isSpaceDown
 
@@ -145,7 +151,9 @@ export function DrawingLayer() {
           ? vectorEdit
           : toolMode === 'LASSO_LOCK'
             ? lockTool
-            : draw
+            : toolMode === 'INTENT_PIN'
+              ? intentPinTool
+              : draw
 
   return (
     <>
@@ -156,6 +164,7 @@ export function DrawingLayer() {
         onPointerUp={handlers.onPointerUp}
       />
       <LockFieldView locks={lockPolygons} />
+      <IntentFieldView pins={intentPins} pending={pendingPin} />
       {graph.strokes.map((stroke) => (
         <StrokeView key={stroke.id} graph={graph} stroke={stroke} selected={selectedSet.has(stroke.id)} />
       ))}

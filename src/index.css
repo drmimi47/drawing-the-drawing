@@ -200,6 +200,47 @@ body {
   background: rgba(47, 111, 237, 0.12);
 }
 
+.context-menu-label {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.intent-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.context-menu-cancel {
+  color: rgba(0, 0, 0, 0.55);
+}
+
+/* Hint shown while sizing an intent pin's radius. */
+.size-hint {
+  position: fixed;
+  z-index: 30;
+  transform: translate(12px, 12px);
+  padding: 6px 10px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 11px;
+  border-radius: 8px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: var(--panel-shadow);
+}
+
 /* ---- Normalize strength panel ---- */
 .normalize-panel {
   position: fixed;

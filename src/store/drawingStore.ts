@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Graph, LockPolygon, RawSample, SamplePoint } from '../types/geometry'
+import type { Graph, IntentPin, IntentType, LockPolygon, RawSample, SamplePoint } from '../types/geometry'
 import { emptyGraph } from '../types/geometry'
 import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
 import { segmentStrokesByPolygon } from '../geometry/clip'
@@ -13,13 +13,22 @@ import { simplifyRDP } from '../geometry/simplify'
  * crossings into shared vertices. Undo snapshots the whole graph.
  */
 
-export type ToolMode = 'DRAW' | 'ERASE' | 'PAN' | 'SELECT' | 'LASSO' | 'VECTOR' | 'LASSO_LOCK'
+export type ToolMode =
+  | 'DRAW'
+  | 'ERASE'
+  | 'PAN'
+  | 'SELECT'
+  | 'LASSO'
+  | 'VECTOR'
+  | 'LASSO_LOCK'
+  | 'INTENT_PIN'
 export type Stage = 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
 
 /** Tools that maintain (rather than clear) the current selection. */
 const SELECTION_TOOLS = new Set<ToolMode>(['SELECT', 'LASSO'])
 
 let lockCounter = 0
+let pinCounter = 0
 
 const HISTORY_LIMIT = 100
 
@@ -27,6 +36,19 @@ const HISTORY_LIMIT = 100
 interface HistoryEntry {
   graph: Graph
   lockPolygons: LockPolygon[]
+  intentPins: IntentPin[]
+}
+
+/** Transient state while placing an intent pin (center → type → radius → commit). */
+export interface PendingPin {
+  x: number
+  y: number
+  /** Screen position of the placement click, for positioning the type popup. */
+  screenX: number
+  screenY: number
+  phase: 'type' | 'radius'
+  intentType: IntentType | null
+  radius: number
 }
 
 interface DrawingState {
@@ -40,7 +62,11 @@ interface DrawingState {
   selectedStrokeIds: string[]
   /** Geometric lock regions (feathered) that gate normalize/generate. */
   lockPolygons: LockPolygon[]
-  /** Undo/redo stacks: snapshots of graph + locks before each action. */
+  /** Intent pins (spatial prompts that steer Phase-2 generation). */
+  intentPins: IntentPin[]
+  /** Transient pin being placed, or null. */
+  pendingPin: PendingPin | null
+  /** Undo/redo stacks: snapshots of graph + locks + pins before each action. */
   past: HistoryEntry[]
   future: HistoryEntry[]
 
@@ -57,6 +83,13 @@ interface DrawingState {
   addLockRegion: (points: { x: number; y: number }[], featherRadius: number) => void
   removeLock: (id: string) => void
   clearLocks: () => void
+  removeIntentPin: (id: string) => void
+  // Intent pin placement flow.
+  beginPin: (x: number, y: number, screenX: number, screenY: number) => void
+  setPinType: (intentType: IntentType) => void
+  setPinRadius: (radius: number) => void
+  commitPin: () => void
+  cancelPin: () => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
 
@@ -83,6 +116,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   graph: emptyGraph(),
   selectedStrokeIds: [],
   lockPolygons: [],
+  intentPins: [],
+  pendingPin: null,
   past: [],
   future: [],
 
@@ -91,6 +126,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       toolMode: tool,
       // Leaving the selection tools clears the highlight so it doesn't linger.
       selectedStrokeIds: SELECTION_TOOLS.has(tool) ? state.selectedStrokeIds : [],
+      // Abandon any in-progress pin placement when leaving the pin tool.
+      pendingPin: tool === 'INTENT_PIN' ? state.pendingPin : null,
     })),
   setStage: (stage) => set({ stage }),
   setColor: (color) => set({ strokeColor: color }),
@@ -148,6 +185,40 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       future: [],
       lockPolygons: [],
     })),
+  removeIntentPin: (id) =>
+    set((state) => ({
+      past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+      future: [],
+      intentPins: state.intentPins.filter((p) => p.id !== id),
+    })),
+
+  beginPin: (x, y, screenX, screenY) =>
+    set({ pendingPin: { x, y, screenX, screenY, phase: 'type', intentType: null, radius: 40 } }),
+  setPinType: (intentType) =>
+    set((state) =>
+      state.pendingPin ? { pendingPin: { ...state.pendingPin, intentType, phase: 'radius' } } : {},
+    ),
+  setPinRadius: (radius) =>
+    set((state) => (state.pendingPin ? { pendingPin: { ...state.pendingPin, radius } } : {})),
+  commitPin: () =>
+    set((state) => {
+      const p = state.pendingPin
+      if (!p || !p.intentType) return { pendingPin: null }
+      const pin: IntentPin = {
+        id: `pin-${Date.now()}-${pinCounter++}`,
+        x: p.x,
+        y: p.y,
+        radius: Math.max(8, p.radius),
+        intentType: p.intentType,
+      }
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        intentPins: [...state.intentPins, pin],
+        pendingPin: null,
+      }
+    }),
+  cancelPin: () => set({ pendingPin: null }),
   setVertexPositions: (updates) =>
     set((state) => {
       const vertices = { ...state.graph.vertices }
@@ -182,6 +253,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       return {
         graph: previous.graph,
         lockPolygons: previous.lockPolygons,
+        intentPins: previous.intentPins,
         past,
         future: [...state.future, snapshot(state)].slice(-HISTORY_LIMIT),
       }
@@ -194,6 +266,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       return {
         graph: next.graph,
         lockPolygons: next.lockPolygons,
+        intentPins: next.intentPins,
         future,
         past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
       }
@@ -203,7 +276,12 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       if (state.past.length === 0) return {}
       const past = state.past.slice()
       const previous = past.pop()!
-      return { graph: previous.graph, lockPolygons: previous.lockPolygons, past }
+      return {
+        graph: previous.graph,
+        lockPolygons: previous.lockPolygons,
+        intentPins: previous.intentPins,
+        past,
+      }
     }),
   clear: () =>
     set((state) => ({
@@ -213,6 +291,10 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     })),
 }))
 
-function snapshot(state: { graph: Graph; lockPolygons: LockPolygon[] }): HistoryEntry {
-  return { graph: state.graph, lockPolygons: state.lockPolygons }
+function snapshot(state: {
+  graph: Graph
+  lockPolygons: LockPolygon[]
+  intentPins: IntentPin[]
+}): HistoryEntry {
+  return { graph: state.graph, lockPolygons: state.lockPolygons, intentPins: state.intentPins }
 }
