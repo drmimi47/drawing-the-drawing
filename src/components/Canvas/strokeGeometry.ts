@@ -11,28 +11,17 @@ import type { SamplePoint } from '../../types/geometry'
 
 const RESAMPLE_SPACING = 3 // world units between resampled centerline points
 
-/** Map a pressure value (0..1) to a half-width in world units. */
-export function halfWidthForPressure(
-  baseWidth: number,
-  pressure: number,
-  usePressure: boolean,
-): number {
-  const halfWidth = baseWidth / 2
-  if (!usePressure) return halfWidth
-  const clamped = Math.min(Math.max(pressure, 0), 1)
-  return halfWidth * (0.3 + 1.2 * clamped)
-}
-
+/**
+ * Convert pointer samples to centerline points at a FIXED, uniform half-width.
+ * Pressure / tilt / speed are deliberately ignored — every stroke is the same
+ * thickness from start to finish.
+ */
 export function rawToStrokePoints(
-  points: { x: number; y: number; pressure: number }[],
+  points: { x: number; y: number }[],
   baseWidth: number,
-  usePressure: boolean,
 ): SamplePoint[] {
-  return points.map((p) => ({
-    x: p.x,
-    y: p.y,
-    w: halfWidthForPressure(baseWidth, p.pressure, usePressure),
-  }))
+  const halfWidth = baseWidth / 2
+  return points.map((p) => ({ x: p.x, y: p.y, w: halfWidth }))
 }
 
 function dist(a: SamplePoint, b: SamplePoint): number {
@@ -92,7 +81,11 @@ export function resampleCentripetalCatmullRom(
 }
 
 /**
- * Build a variable-width triangle ribbon with round end caps. The material is
+ * Build a clean, UNIFORM-width ribbon from a centerline (round caps + round
+ * joins). Every point shares the same half-width — no pressure, tapering, or
+ * width smoothing. Each vertex is offset along the normal of its averaged
+ * tangent, which on a densely resampled curve yields smooth, consistent edges;
+ * a half-disk fan at each end gives the round line cap. The material is
  * double-sided, so triangle winding doesn't matter.
  */
 export function buildRibbon(points: SamplePoint[]): {
@@ -104,59 +97,33 @@ export function buildRibbon(points: SamplePoint[]): {
 
   const pos: number[] = []
   const idx: number[] = []
+  const hw = points[0].w // uniform half-width
 
-  // Two strip vertices (left, right) per centerline point. Offsets use a proper
-  // MITER join (bisector scaled by 1/cos(half-angle)) so thickness stays constant
-  // through corners instead of pinching; clamped to avoid spikes at sharp angles.
-  const MITER_LIMIT = 4
+  // Averaged unit tangent at point i (incoming + outgoing direction).
+  const tangentAt = (i: number): [number, number] => {
+    let inx = points[i].x - points[Math.max(0, i - 1)].x
+    let iny = points[i].y - points[Math.max(0, i - 1)].y
+    let outx = points[Math.min(n - 1, i + 1)].x - points[i].x
+    let outy = points[Math.min(n - 1, i + 1)].y - points[i].y
+    const il = Math.hypot(inx, iny)
+    const ol = Math.hypot(outx, outy)
+    if (il > 1e-9) { inx /= il; iny /= il } else { inx = outx; iny = outy }
+    if (ol > 1e-9) { outx /= ol; outy /= ol } else { outx = inx; outy = iny }
+    let tx = inx + outx
+    let ty = iny + outy
+    const tl = Math.hypot(tx, ty)
+    if (tl < 1e-6) { tx = outx; ty = outy } else { tx /= tl; ty /= tl }
+    return [tx, ty]
+  }
+
+  // Two strip vertices (left, right) per centerline point, offset along the
+  // normal of the averaged tangent.
   for (let i = 0; i < n; i++) {
-    const cur = points[i]
-
-    // Incoming / outgoing unit directions (fall back to the single edge at ends).
-    let inx = cur.x - points[Math.max(0, i - 1)].x
-    let iny = cur.y - points[Math.max(0, i - 1)].y
-    let outx = points[Math.min(n - 1, i + 1)].x - cur.x
-    let outy = points[Math.min(n - 1, i + 1)].y - cur.y
-    const inLen = Math.hypot(inx, iny)
-    const outLen = Math.hypot(outx, outy)
-    if (inLen < 1e-9) {
-      inx = outx
-      iny = outy
-    } else {
-      inx /= inLen
-      iny /= inLen
-    }
-    if (outLen < 1e-9) {
-      outx = inx
-      outy = iny
-    } else {
-      outx /= outLen
-      outy /= outLen
-    }
-
-    // Edge normals (left side), then the miter (bisector) direction.
-    const ninx = -iny
-    const niny = inx
-    const noutx = -outy
-    const nouty = outx
-    let mx = ninx + noutx
-    let my = niny + nouty
-    const mlen = Math.hypot(mx, my)
-    if (mlen < 1e-6) {
-      mx = ninx
-      my = niny
-    } else {
-      mx /= mlen
-      my /= mlen
-    }
-    const cosHalf = mx * ninx + my * niny
-    const scale = Math.min(MITER_LIMIT, cosHalf > 1e-3 ? 1 / cosHalf : MITER_LIMIT)
-
-    const hw = cur.w
-    const ox = mx * hw * scale
-    const oy = my * hw * scale
-    pos.push(cur.x + ox, cur.y + oy, 0) // left  = 2i
-    pos.push(cur.x - ox, cur.y - oy, 0) // right = 2i+1
+    const [tx, ty] = tangentAt(i)
+    const nx = -ty
+    const ny = tx
+    pos.push(points[i].x + nx * hw, points[i].y + ny * hw, 0) // left  = 2i
+    pos.push(points[i].x - nx * hw, points[i].y - ny * hw, 0) // right = 2i+1
   }
 
   for (let i = 0; i < n - 1; i++) {
@@ -167,9 +134,10 @@ export function buildRibbon(points: SamplePoint[]): {
     idx.push(l0, r0, l1, r0, r1, l1)
   }
 
-  // Round caps: a half-disk fan around each endpoint, bulging outward.
-  const addCap = (cx: number, cy: number, hw: number, outwardAngle: number) => {
-    const steps = 10
+  // Round caps: a half-disk fan bulging outward from each endpoint along the
+  // true end tangent (the round line cap), at the same uniform radius.
+  const addCap = (cx: number, cy: number, outwardAngle: number) => {
+    const steps = 16
     const center = pos.length / 3
     pos.push(cx, cy, 0)
     let prevIdx = -1
@@ -182,13 +150,17 @@ export function buildRibbon(points: SamplePoint[]): {
     }
   }
 
+  // Find the first/last neighbours that are distinct enough for a stable tangent.
+  let sj = 1
+  while (sj < n - 1 && dist(points[0], points[sj]) < 1e-4) sj++
+  let ej = n - 2
+  while (ej > 0 && dist(points[n - 1], points[ej]) < 1e-4) ej--
+
   const start = points[0]
-  const afterStart = points[1]
-  addCap(start.x, start.y, start.w, Math.atan2(start.y - afterStart.y, start.x - afterStart.x))
+  addCap(start.x, start.y, Math.atan2(start.y - points[sj].y, start.x - points[sj].x))
 
   const end = points[n - 1]
-  const beforeEnd = points[n - 2]
-  addCap(end.x, end.y, end.w, Math.atan2(end.y - beforeEnd.y, end.x - beforeEnd.x))
+  addCap(end.x, end.y, Math.atan2(end.y - points[ej].y, end.x - points[ej].x))
 
   return { positions: new Float32Array(pos), indices: new Uint32Array(idx) }
 }

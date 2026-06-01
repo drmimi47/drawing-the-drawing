@@ -90,9 +90,9 @@ export type IntentType = 'DENSITY' | 'PEDESTRIAN' | 'SQF' | 'LANDUSE'
 /** Display label + field color per intent type. */
 export const INTENT_META: Record<IntentType, { label: string; color: string }> = {
   DENSITY: { label: 'Density', color: '#8b5cf6' },
-  PEDESTRIAN: { label: 'Pedestrian Flow', color: '#1f9d55' },
-  SQF: { label: 'SQF Priority', color: '#e8852b' },
-  LANDUSE: { label: 'Land Use', color: '#2f6fed' },
+  PEDESTRIAN: { label: 'Pedestrian flow', color: '#1f9d55' },
+  SQF: { label: 'SQF priority', color: '#e8852b' },
+  LANDUSE: { label: 'Land use', color: '#2f6fed' },
 }
 
 /**

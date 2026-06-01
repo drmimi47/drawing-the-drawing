@@ -12,6 +12,7 @@ import { emptyGraph } from '../types/geometry'
 import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
 import { segmentStrokesByPolygon } from '../geometry/clip'
 import { simplifyRDP } from '../geometry/simplify'
+import { buildSnapIndex, type SpatialGrid } from '../geometry/spatialIndex'
 
 /**
  * Central canvas + tool state (Cluster D).
@@ -34,6 +35,50 @@ export type ToolMode =
   | 'TEXT'
 export type Stage = 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
 export type ToolbarPosition = 'top' | 'right' | 'bottom' | 'left'
+
+/** Default artboard size in world units (3:2 landscape, ARCH-D-like). */
+export const DEFAULT_PAGE_WIDTH = 1080
+export const DEFAULT_PAGE_HEIGHT = 720
+
+/** Fraction of the page frame an imported asset is fit within (keeps a margin). */
+const UNDERLAY_FIT_MARGIN = 0.92
+
+/**
+ * A dimmed, read-only background image to trace over (PDF/image import).
+ *
+ * The underlay carries its OWN placement transform (a centered rect on the world
+ * grid) so importing an asset never resizes the global page frame — multiple
+ * assets can be swapped in/out against one stable coordinate system.
+ */
+export interface Underlay {
+  /** Data URL of the raster (a PDF page is pre-rendered to an image). */
+  src: string
+  /** 0..1 dim factor for the underlay plane. */
+  opacity: number
+  /** Intrinsic raster pixel dimensions of the imported asset. */
+  pixelWidth: number
+  pixelHeight: number
+  /** Placement on the world grid: center offset (world units). */
+  x: number
+  y: number
+  /** Mesh size on the world grid (world units), aspect-preserving. */
+  width: number
+  height: number
+}
+
+/** Fit an asset's intrinsic pixels into the page frame, centered, aspect-preserving. */
+function fitUnderlayToPage(
+  pixelWidth: number,
+  pixelHeight: number,
+  pageWidth: number,
+  pageHeight: number,
+): { x: number; y: number; width: number; height: number } {
+  const scale = Math.min(
+    (pageWidth * UNDERLAY_FIT_MARGIN) / pixelWidth,
+    (pageHeight * UNDERLAY_FIT_MARGIN) / pixelHeight,
+  )
+  return { x: 0, y: 0, width: pixelWidth * scale, height: pixelHeight * scale }
+}
 
 /** Tools that maintain (rather than clear) the current selection. */
 const SELECTION_TOOLS = new Set<ToolMode>(['SELECT', 'LASSO'])
@@ -82,6 +127,9 @@ interface DrawingState {
   /** Nominal stroke width in world units (1 world unit = 1px at zoom 1). */
   baseWidth: number
   graph: Graph
+  /** Spatial index of snap targets (vertices + edge midpoints), auto-rebuilt
+   *  whenever the graph changes. Queried by the snapping engine. */
+  spatialIndex: SpatialGrid
   /** IDs of strokes currently selected (for selection-scoped normalize). */
   selectedStrokeIds: string[]
   /** Geometric lock regions (feathered) that gate normalize/generate. */
@@ -98,6 +146,19 @@ interface DrawingState {
   showIntentLabels: boolean
   /** Which edge the main tool dock is docked to. */
   toolbarPosition: ToolbarPosition
+  /** Artboard (page sheet) size in world units. Independent world coordinate
+   *  frame — NOT driven by imports; only the user/default sets it. */
+  pageWidth: number
+  pageHeight: number
+  /** Dimmed read-only tracing underlay (carries its own transform), or null. */
+  underlay: Underlay | null
+  /** Live real-world scale: meters per world unit (1 world unit = 1px @ zoom 1).
+   *  Null until calibrated (currently derived from the active Mapbox projection). */
+  metersPerWorldUnit: number | null
+  /** Whether the Mapbox map overlay is shown over the canvas. */
+  mapActive: boolean
+  /** Finalized GeoJSON drawn on the map, for the main app to reference/store. */
+  mapGeometry: GeoJSON.FeatureCollection | null
   /** Undo/redo stacks: snapshots of graph + locks + pins before each action. */
   past: HistoryEntry[]
   future: HistoryEntry[]
@@ -130,6 +191,19 @@ interface DrawingState {
   moveText: (id: string, x: number, y: number) => void
   setShowIntentLabels: (show: boolean) => void
   setToolbarPosition: (position: ToolbarPosition) => void
+  /** Resize the independent world frame (page sheet) in world units. */
+  setPageSize: (width: number, height: number) => void
+  /** Place a tracing underlay, fitting the asset's pixels into the page frame.
+   *  Does NOT resize the page — the world coordinate frame stays fixed. */
+  setUnderlay: (src: string, pixelWidth: number, pixelHeight: number) => void
+  setUnderlayOpacity: (opacity: number) => void
+  /** Remove the underlay (the page frame is unaffected). */
+  clearUnderlay: () => void
+  /** Set the live real-world scale (meters per world unit), or null to clear. */
+  setGeoScale: (metersPerWorldUnit: number | null) => void
+  setMapActive: (active: boolean) => void
+  toggleMap: () => void
+  setMapGeometry: (geometry: GeoJSON.FeatureCollection | null) => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
 
@@ -154,6 +228,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   strokeColor: '#1a1a1a',
   baseWidth: 3.5,
   graph: emptyGraph(),
+  spatialIndex: buildSnapIndex(emptyGraph()),
   selectedStrokeIds: [],
   lockPolygons: [],
   intentPins: [],
@@ -162,6 +237,12 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   pendingText: null,
   showIntentLabels: false,
   toolbarPosition: 'bottom',
+  pageWidth: DEFAULT_PAGE_WIDTH,
+  pageHeight: DEFAULT_PAGE_HEIGHT,
+  underlay: null,
+  metersPerWorldUnit: null,
+  mapActive: false,
+  mapGeometry: null,
   past: [],
   future: [],
 
@@ -306,6 +387,33 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     set((state) => ({ textLabels: state.textLabels.map((l) => (l.id === id ? { ...l, x, y } : l)) })),
   setShowIntentLabels: (show) => set({ showIntentLabels: show }),
   setToolbarPosition: (position) => set({ toolbarPosition: position }),
+  setPageSize: (width, height) =>
+    set((state) => {
+      const pageWidth = Math.max(1, width)
+      const pageHeight = Math.max(1, height)
+      // Re-fit any existing underlay into the resized frame.
+      const underlay = state.underlay
+        ? { ...state.underlay, ...fitUnderlayToPage(state.underlay.pixelWidth, state.underlay.pixelHeight, pageWidth, pageHeight) }
+        : null
+      return { pageWidth, pageHeight, underlay }
+    }),
+  setUnderlay: (src, pixelWidth, pixelHeight) =>
+    set((state) => ({
+      underlay: {
+        src,
+        opacity: 0.5,
+        pixelWidth,
+        pixelHeight,
+        ...fitUnderlayToPage(pixelWidth, pixelHeight, state.pageWidth, state.pageHeight),
+      },
+    })),
+  setUnderlayOpacity: (opacity) =>
+    set((state) => (state.underlay ? { underlay: { ...state.underlay, opacity } } : {})),
+  clearUnderlay: () => set({ underlay: null }),
+  setGeoScale: (metersPerWorldUnit) => set({ metersPerWorldUnit }),
+  setMapActive: (active) => set({ mapActive: active }),
+  toggleMap: () => set((state) => ({ mapActive: !state.mapActive })),
+  setMapGeometry: (geometry) => set({ mapGeometry: geometry }),
   setVertexPositions: (updates) =>
     set((state) => {
       const vertices = { ...state.graph.vertices }
@@ -394,3 +502,14 @@ function snapshot(state: {
     textLabels: state.textLabels,
   }
 }
+
+// Keep the spatial snap index in lockstep with the graph. Any action that
+// replaces the graph object — stroke commit, polyline finish, erase, vertex edit,
+// lock/lasso segmentation, undo/redo, clear — automatically triggers a re-index.
+// This is the single place snap targets are kept current, so callers never have
+// to remember to rebuild it.
+useDrawingStore.subscribe((state, prev) => {
+  if (state.graph !== prev.graph) {
+    useDrawingStore.setState({ spatialIndex: buildSnapIndex(state.graph) })
+  }
+})

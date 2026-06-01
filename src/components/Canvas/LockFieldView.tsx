@@ -4,21 +4,22 @@ import type { LockPolygon } from '../../types/geometry'
 import { lockInfluenceAt } from '../../geometry/locks'
 
 /**
- * Lock-region visualization (Cluster H, H4 — distance-field gradient).
+ * Lock-region visualization.
  *
- * The fill opacity is driven by the lock INFLUENCE field (the same function that
- * gates Clean up): darkest in the hard-locked core, fading smoothly to
- * transparent at the boundary. Overlapping locks union via max(influence).
+ * Renders the actual interior distance-field gradient: transparent at the polygon
+ * boundary, ramping up to MAX_OPACITY at featherRadius depth inside, then holding
+ * at MAX_OPACITY through the hard core. This mirrors the lockInfluenceAt() math
+ * that gates the Normalize/Generate pipeline — the visual directly communicates
+ * the AI's zone of influence (feather = negotiable, core = fully locked).
  *
- * Implemented by baking the field into a DataTexture over the locks' bounding
- * box and sampling it as the material's alpha (white rgb, red material color).
+ * Bakes influence values into a DataTexture over the locks' bounding box.
  * Rebakes only when the locks change. Sits behind strokes (z = -0.5).
  */
 
-const LOCK_COLOR = new THREE.Color('#e23b3b')
-const MAX_OPACITY = 0.5
+const LOCK_COLOR = new THREE.Color('#c2c7ce') // light grey
+const MAX_OPACITY = 0.4
 const MAX_TEXELS = 256
-const MARGIN = 8 // world-unit padding so the edge fade resolves cleanly
+const MARGIN = 4 // small world-unit padding around the bounding box
 
 interface Field {
   texture: THREE.DataTexture
@@ -61,7 +62,8 @@ export function LockFieldView({ locks }: { locks: LockPolygon[] }) {
       for (let i = 0; i < cols; i++) {
         const wx = minX + ((i + 0.5) / cols) * w
         const wy = minY + ((j + 0.5) / rows) * h
-        const influence = lockInfluenceAt(wx, wy, locks) // 0..1, max across locks
+        // Interior distance-field: 0 at boundary → 1.0 at featherRadius depth.
+        const influence = lockInfluenceAt(wx, wy, locks)
         const idx = (j * cols + i) * 4
         data[idx] = 255
         data[idx + 1] = 255

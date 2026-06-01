@@ -5,12 +5,15 @@ import { useCanvasStore } from '../../store/canvasStore'
 import { ERASE_RADIUS_PX } from '../../hooks/useEraser'
 import { CameraControls } from './CameraControls'
 import { DrawingLayer } from './DrawingLayer'
+import { PageSheet } from './PageSheet'
+import { UnderlayView } from './UnderlayView'
 
 /**
  * Root R3F scene for Blindspot.
  *
  * Orthographic camera for a flat 2D workspace (1 world unit = 1 px at zoom 1),
- * a plain white background, pan/zoom controls, and the drawing layer.
+ * a dark workspace backdrop with a centered white page sheet, pan/zoom
+ * controls, and the drawing layer.
  */
 
 /** Circular SVG cursor that matches the eraser radius on screen. */
@@ -54,10 +57,12 @@ export function CanvasScene() {
         gl={{ antialias: true, preserveDrawingBuffer: true, stencil: true }}
         dpr={[1, 2]}
       >
-        {/* Plain white workspace. */}
-        <color attach="background" args={['#ffffff']} />
+        {/* Dark workspace surrounding the white page sheet. */}
+        <color attach="background" args={['#181a1b']} />
 
         <CameraControls />
+        <PageSheet />
+        <UnderlayView />
         <DrawingLayer />
       </Canvas>
     </div>

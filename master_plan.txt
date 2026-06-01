@@ -117,7 +117,7 @@ in Cluster G so geometry never changes on pan).
 PHASE 1 — NON-LLM FOUNDATION  (build this now, in order)
 ================================================================================
 
-CLUSTER G — Workflow orchestration + explicit "Clean up"
+CLUSTER G — Workflow orchestration + explicit "Clean up" *done
   G1 [ ] Stage state ('SKETCH'|'NORMALIZE'|'LOCK_INTENT'|'GENERATE') + top-center stage
          indicator surfacing the current stage's primary action. Non-modal.
   G2 [ ] Selection: marquee + lasso to select a set of strokes (selection state in store).
@@ -129,31 +129,35 @@ CLUSTER G — Workflow orchestration + explicit "Clean up"
   * Verify: pan never mutates geometry; Clean up previews and commits only on Accept;
     Cancel restores exactly; a selection limits the effect to chosen strokes.
 
-CLUSTER H — Hybrid Fields  (decomposed — do not bundle)
-  H1 [ ] LockPolygon data structure + LASSO_LOCK tool: draw/close a polygon; store it.
+CLUSTER H — Hybrid Fields  (decomposed — do not bundle) *done
+  H1 [ ] LockPolygon data structure + LASSO_LOCK tool (new tool on toolbar): draw/close a polygon; store it.
   H2 [ ] Hard lock: point-in-polygon → influence 1.0 inside. Wire into Clean up (skip
          influence-1 vertices). Verify locked strokes are untouched. (No feather yet.)
   H3 [ ] Feathered falloff: analytical distance-to-polygon field; influence slopes 1.0→0.0
          across featherRadius. Clean-up effect scales by (1 - influence).
   H4 [ ] Lock-field shader: crisp polygon border + outward neon glow over the feather zone.
   H5 [ ] IntentPin tool + data: place pins; edit properties (density / pedestrian flow /
-         SQF priority / land-use). Pins do NOT freeze geometry.
+         SQF priority / land-use). Pins do NOT freeze geometry, they are setting up giving context
+         to LLM to understand what the drawn lines and spatial geometry means. 
+         these properites will be placeholds for now. when user clicks pin icon a list should appear 
+         over the tool button with a list of placeholder pin types. 
   H6 [ ] IntentPin metaball field + color-coded shader (overlapping land-use profiles).
   * Verify: Clean up fully bypasses influence-1 vertices and scales by falloff elsewhere;
     lock + intent fields render clearly at 60 FPS. (Pins are data+visual only until Phase 2.)
 
-CLUSTER J — Version history & non-destructive iteration
+CLUSTER J — Version history & non-destructive iteration *done
   [ ] Snapshot graph before each transform (cap ~200); undo/redo across transforms;
       restore-version affordance; optional trace-paper overlay of stacked snapshots.
   * Verify: any transform reverts; restoring a version reproduces it exactly.
 
-CLUSTER K — Interop & handoff
+CLUSTER K — Interop & handoff *done
   [ ] Import PDF/image/GIS as a dimmed read-only underlay; tag imported vertices isContext=true.
   [ ] Export SVG + PDF + PNG (DXF later).
+  [ ] The default artboard/canvas should change to the imported pdf/image/gis page size. 
   [ ] (Deferred) set-scale-by-reference.
   * Verify: trace an imported plan and export vectors that open cleanly in Bluebeam / CAD.
 
-CLUSTER N — Normalize: Urban Morphology Engine  (incremental; each step standalone)
+CLUSTER N — Normalize: Urban Morphology Engine  (incremental; each step standalone) *done-ish
   N1 [ ] Parallel-corridor detection: near-parallel dual paths (or a single path tagged
          as a corridor) → clean parallel ribbon centerline.
   N2 [ ] Convex polygon: generalize rectangle fitting to clean convex N-gon parcels/blocks.

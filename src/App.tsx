@@ -1,7 +1,10 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { CanvasScene } from './components/Canvas'
-import { Toolbar } from './components/Toolbar'
-import { StageIndicator } from './components/Toolbar/StageIndicator'
+import { MenuBar } from './components/Menu/MenuBar'
+import { Ribbon } from './components/Ribbon/Ribbon'
+import { Crosshair } from './components/Crosshair/Crosshair'
+// Lazy-loaded so Mapbox GL JS + Turf.js only download when the map is opened.
+const MapView = lazy(() => import('./components/Map/MapView').then((m) => ({ default: m.MapView })))
 import { NormalizeMenu } from './components/Toolbar/NormalizeMenu'
 import { IntentPinMenu } from './components/Toolbar/IntentPinMenu'
 import { TextEditor } from './components/Toolbar/TextEditor'
@@ -12,6 +15,11 @@ export default function App() {
   // pipeline — draw, erase, normalize, and lock add/remove.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // ESC: deselect / clear the active marquee, lasso, and lock-region overlay.
+      if (e.key === 'Escape') {
+        useDrawingStore.getState().clearSelection()
+        return
+      }
       if (!(e.ctrlKey || e.metaKey)) return
       const key = e.key.toLowerCase()
       if (key === 'z' && !e.shiftKey) {
@@ -26,25 +34,28 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  const toolbarPosition = useDrawingStore((s) => s.toolbarPosition)
+  const mapActive = useDrawingStore((s) => s.mapActive)
 
   return (
-    // Flex layout: the docked toolbar takes one edge, the canvas area fills the
-    // rest. Toolbar is the first child; flex-direction (set per dock side in CSS)
-    // places it on the chosen edge.
-    <div className="app" data-dock={toolbarPosition}>
-      <Toolbar />
+    // Column shell: a full-width menu bar, the ribbon toolbar, then the canvas
+    // workspace fills the rest. The R3F canvas fills the whole canvas area, so
+    // coordinate tracking is intact.
+    <div className="app-shell">
+      <MenuBar />
+      <Ribbon />
 
       <main className="canvas-area">
         <CanvasScene />
-
-        {/* Overlays live inside the canvas area, so they never sit under the dock. */}
-        <div className="status-bar">
-          <span className="status-dot" />
-          DYNAMIC TRACE PAPER
-        </div>
-        <StageIndicator />
+        {/* Geospatial overlay, confined to the canvas bounds (loads on demand). */}
+        {mapActive && (
+          <Suspense fallback={null}>
+            <MapView />
+          </Suspense>
+        )}
       </main>
+
+      {/* Full-viewport pointer crosshair — hidden while the map is active. */}
+      {!mapActive && <Crosshair />}
 
       {/* Fixed-position menus (anchored to click coordinates). */}
       <NormalizeMenu />

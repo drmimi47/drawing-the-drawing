@@ -18,6 +18,7 @@ import { MarchingAntsLine } from './MarchingAntsLine'
 import { LockFieldView } from './LockFieldView'
 import { IntentFieldView } from './IntentFieldView'
 import { TextLayer } from './TextLayer'
+import { SnapIndicator } from './SnapIndicator'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
@@ -141,6 +142,10 @@ export function DrawingLayer() {
 
   const selectedSet = useMemo(() => new Set(selectedStrokeIds), [selectedStrokeIds])
 
+  // Active object-snap target (polyline placement or vector-edit drag).
+  const snapTarget =
+    toolMode === 'POLYLINE' ? polyline.snap : toolMode === 'VECTOR' ? vectorEdit.snap : null
+
   const isSelectionTool = toolMode === 'SELECT' || toolMode === 'LASSO'
   const interactive =
     (toolMode === 'DRAW' ||
@@ -196,6 +201,7 @@ export function DrawingLayer() {
         <MarchingAntsLine points={lockTool.outline.points} closed color="#e23b3b" />
       )}
       {toolMode === 'VECTOR' && <VectorHandles graph={graph} />}
+      {snapTarget && <SnapIndicator snap={snapTarget} />}
     </>
   )
 }

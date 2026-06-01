@@ -1,5 +1,7 @@
-/* Docked strip: a flex item that spans its edge; the canvas fills the rest. */
+/* Floating tool palette: anchored to a corner of the canvas (position set per
+   dock side in index.css). Sharp edges; the canvas fills the area beneath it. */
 .toolbar-dock {
+  position: absolute;
   z-index: 10;
   display: flex;
   align-items: center;

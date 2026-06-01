@@ -4,19 +4,32 @@ import { useDrawingStore } from '../store/drawingStore'
 import { DEFAULT_FEATHER_RADIUS, pointInPolygon } from '../geometry/locks'
 
 /**
- * Lock-region tool (Cluster H, LASSO_LOCK). Draw a freehand polygon to add a
- * feathered lock region. A click (no drag) inside an existing lock removes it.
+ * Lock-region tool (Cluster H, LASSO_LOCK). Drag a rectangle (like the Marquee
+ * Select tool) to add a lock region. A click (no drag) inside an existing lock
+ * removes it.
+ *
+ * The committed region is still a polygon, so the influence/falloff rule and
+ * multi-region unioning are unchanged — only the authoring gesture is a rect.
  *
  * Exposes a live world-space `outline` for the marching-ants overlay.
  */
 
-const MIN_STEP_SQ = 4
+const MIN_DRAG = 4 // world units before a drag counts as a region (vs. a click)
+
+function rectCorners(ax: number, ay: number, bx: number, by: number) {
+  return [
+    { x: ax, y: ay },
+    { x: bx, y: ay },
+    { x: bx, y: by },
+    { x: ax, y: by },
+  ]
+}
 
 export function useLockTool() {
   const [outline, setOutline] = useState<{ points: { x: number; y: number }[] } | null>(null)
   const activeRef = useRef(false)
-  const ptsRef = useRef<{ x: number; y: number }[]>([])
   const startRef = useRef({ x: 0, y: 0 })
+  const endRef = useRef({ x: 0, y: 0 })
 
   const onPointerDown = useCallback((e: ThreeEvent<PointerEvent>) => {
     if (e.nativeEvent.button !== 0) return
@@ -24,43 +37,39 @@ export function useLockTool() {
     activeRef.current = true
     const p = { x: e.point.x, y: e.point.y }
     startRef.current = p
-    ptsRef.current = [p]
-    setOutline({ points: [p] })
+    endRef.current = p
+    setOutline({ points: rectCorners(p.x, p.y, p.x, p.y) })
   }, [])
 
   const onPointerMove = useCallback((e: ThreeEvent<PointerEvent>) => {
     if (!activeRef.current) return
     const p = { x: e.point.x, y: e.point.y }
-    const last = ptsRef.current[ptsRef.current.length - 1]
-    const dx = p.x - last.x
-    const dy = p.y - last.y
-    if (dx * dx + dy * dy >= MIN_STEP_SQ) {
-      ptsRef.current.push(p)
-      setOutline({ points: [...ptsRef.current] })
-    }
+    endRef.current = p
+    setOutline({ points: rectCorners(startRef.current.x, startRef.current.y, p.x, p.y) })
   }, [])
 
   const onPointerUp = useCallback(() => {
     if (!activeRef.current) return
     activeRef.current = false
-    const pts = ptsRef.current
     setOutline(null)
 
     const store = useDrawingStore.getState()
-    const moved =
-      Math.hypot(
-        pts[pts.length - 1].x - startRef.current.x,
-        pts[pts.length - 1].y - startRef.current.y,
-      ) > 4
+    const { x: sx, y: sy } = startRef.current
+    const { x: ex, y: ey } = endRef.current
 
-    if (!moved || pts.length < 3) {
+    const moved = Math.hypot(ex - sx, ey - sy) > MIN_DRAG
+    if (!moved) {
       // Treat as a click: remove a lock under the cursor, if any.
-      const hit = store.lockPolygons.find((l) => pointInPolygon(startRef.current.x, startRef.current.y, l.points))
+      const hit = store.lockPolygons.find((l) => pointInPolygon(sx, sy, l.points))
       if (hit) store.removeLock(hit.id)
       return
     }
 
-    store.addLockRegion(pts, DEFAULT_FEATHER_RADIUS)
+    const minX = Math.min(sx, ex)
+    const maxX = Math.max(sx, ex)
+    const minY = Math.min(sy, ey)
+    const maxY = Math.max(sy, ey)
+    store.addLockRegion(rectCorners(minX, minY, maxX, maxY), DEFAULT_FEATHER_RADIUS)
   }, [])
 
   return { outline, onPointerDown, onPointerMove, onPointerUp }

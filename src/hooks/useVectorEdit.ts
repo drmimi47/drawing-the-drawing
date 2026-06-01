@@ -1,7 +1,8 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
 import type { OrthographicCamera } from 'three'
 import { useDrawingStore } from '../store/drawingStore'
+import { SNAP_THRESHOLD_PX, type SnapPoint } from '../geometry/spatialIndex'
 
 /** Pick radius for grabbing an anchor point, in screen pixels. */
 const PICK_RADIUS_PX = 10
@@ -10,6 +11,10 @@ const PICK_RADIUS_PX = 10
  * Edit tool (Illustrator "direct selection" style). Press near an anchor point
  * to grab and drag it (connected strokes update live), OR press on a text label
  * to reposition it. One undo step per drag (snapshot on grab).
+ *
+ * While dragging a vertex it snaps onto nearby vertices / edge midpoints (the
+ * dragged vertex and its own edges are excluded so it can't snap to itself), and
+ * the active snap target is surfaced for an on-canvas indicator.
  */
 export function useVectorEdit() {
   const { camera } = useThree()
@@ -19,6 +24,7 @@ export function useVectorEdit() {
 
   const draggingVertexRef = useRef<string | null>(null)
   const draggingTextRef = useRef<{ id: string; dx: number; dy: number } | null>(null)
+  const [snap, setSnap] = useState<SnapPoint | null>(null)
 
   const onPointerDown = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
@@ -74,15 +80,27 @@ export function useVectorEdit() {
         return
       }
       const id = draggingVertexRef.current
-      if (id) setVertexPositions({ [id]: { x: e.point.x, y: e.point.y } })
+      if (!id) return
+      const zoom = (camera as OrthographicCamera).zoom || 1
+      let x = e.point.x
+      let y = e.point.y
+      // Snap to nearby geometry, excluding the dragged vertex and its own edges.
+      const sp = useDrawingStore.getState().spatialIndex.nearest(x, y, SNAP_THRESHOLD_PX / zoom, new Set([id]))
+      if (sp) {
+        x = sp.x
+        y = sp.y
+      }
+      setSnap(sp)
+      setVertexPositions({ [id]: { x, y } })
     },
-    [setVertexPositions, moveText],
+    [setVertexPositions, moveText, camera],
   )
 
   const onPointerUp = useCallback(() => {
     draggingVertexRef.current = null
     draggingTextRef.current = null
+    setSnap(null)
   }, [])
 
-  return { onPointerDown, onPointerMove, onPointerUp }
+  return { onPointerDown, onPointerMove, onPointerUp, snap }
 }

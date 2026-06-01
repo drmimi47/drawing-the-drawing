@@ -6,8 +6,8 @@
 }
 
 :root {
-  /* Canvas stays white; all UI chrome is solid dark gray (Bluebeam-style). */
-  --bg: #ffffff;
+  /* The page sheet stays white; the workspace + chrome are dark (Bluebeam-style). */
+  --bg: #181a1b; /* dark workspace backdrop around the page */
   --panel: #2d3139; /* toolbars / menus / headers */
   --panel-2: #22252a; /* nested controls (inputs, active wells) */
   --panel-border: #3f444e; /* thin subtle separators */
@@ -39,35 +39,103 @@ body {
   touch-action: none;
 }
 
-/* ---- App layout (dockable toolbar) ---- */
-.app {
+/* ---- App layout: top menu bar, then the canvas workspace ---- */
+.app-shell {
   display: flex;
+  flex-direction: column;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+  background: var(--bg);
 }
 
-/* Toolbar is always the first child; flex-direction places it on the chosen edge
-   and the canvas area fills the remaining space. */
-.app[data-dock='top'] {
-  flex-direction: column;
-}
-.app[data-dock='bottom'] {
-  flex-direction: column-reverse;
-}
-.app[data-dock='left'] {
-  flex-direction: row;
-}
-.app[data-dock='right'] {
-  flex-direction: row-reverse;
-}
-
-/* The canvas area takes all remaining space; overlays anchor to it. */
+/* The canvas workspace fills all space below the menu bar; the floating toolbar
+   and overlays anchor to it. */
 .canvas-area {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+}
+
+/* ---- Top menu bar ---- */
+.menu-bar {
+  z-index: 20;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: 34px;
+  padding: 0 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--panel-border);
+  user-select: none;
+}
+
+.menu-bar-brand {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--text-dim);
+}
+
+.menu-bar-menus {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+.menu-root {
+  position: relative;
+  display: flex;
+}
+
+.menu-root-btn {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  padding: 0 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.menu-root-btn:hover,
+.menu-root-btn.is-open {
+  background: var(--hover);
+}
+
+.menu-dropdown {
+  position: absolute;
+  top: calc(100% + 1px);
+  left: 0;
+  z-index: 40;
+  min-width: 184px;
+  padding: 2px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 0;
+  box-shadow: var(--panel-shadow);
+}
+
+.menu-dropdown-item {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  text-align: left;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.menu-dropdown-item:hover {
+  background: var(--accent);
+  color: #fff;
 }
 
 .canvas-layer {
@@ -85,87 +153,36 @@ body {
   outline: none;
 }
 
-/* ---- Top-left status bar ---- */
-.status-bar {
+/* ---- Full-viewport pointer crosshair ---- */
+/* Sits above the canvas/page content (z 0) but below the chrome — the menu bar
+   (z 20), toolbar and stage bar (z 10), popups (z 30+). pointer-events:none lets
+   every click and selection pass straight through. */
+.crosshair {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.crosshair-line {
   position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 10px;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 0;
-  box-shadow: var(--panel-shadow);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  font-weight: 600;
-  color: var(--text);
-  user-select: none;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  background: rgba(128, 134, 142, 0.6);
+  /* Hint the compositor; positions are driven only via transform. */
+  will-change: transform;
 }
 
-.status-bar .status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 0;
-  background: #d14b4b;
+.crosshair-line--v {
+  width: 1px;
+  height: 100vh;
 }
 
-/* ---- Top-center stage indicator ---- */
-.stage-bar {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 0;
-  padding: 3px;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 0;
-  box-shadow: var(--panel-shadow);
-  user-select: none;
-}
-
-.stage-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-}
-
-.stage-arrow {
-  color: var(--text-dim);
-  font-size: 11px;
-  padding: 0 2px;
-}
-
-.stage-chip {
-  border: none;
-  background: transparent;
-  border-radius: 0;
-  padding: 5px 11px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text);
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
-}
-
-.stage-chip:hover {
-  background: var(--hover);
-}
-
-.stage-chip.is-active {
-  background: var(--accent);
-  color: #fff;
-}
-
-.stage-chip.is-future {
-  opacity: 0.4;
+.crosshair-line--h {
+  width: 100vw;
+  height: 1px;
 }
 
 /* ---- Right-click context menu ---- */
@@ -236,17 +253,17 @@ body {
   box-shadow: var(--panel-shadow);
 }
 
-/* Intent-pin type labels (shown above each pin when hovering the pin tool). */
+/* Intent-pin type labels (shown above each pin when hovering the pin tool).
+   Plain colored text — thin, no shadow, border, or outline. */
 .intent-pin-label {
   transform: translateY(-24px);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 300;
   white-space: nowrap;
   user-select: none;
-  /* Light halo for legibility over geometry — not a bubble. */
-  text-shadow:
-    0 1px 2px rgba(255, 255, 255, 0.9),
-    0 0 2px rgba(255, 255, 255, 0.9);
+  border: none;
+  outline: none;
+  text-shadow: none;
 }
 
 /* Hint shown while sizing an intent pin's radius. */
