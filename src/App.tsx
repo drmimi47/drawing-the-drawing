@@ -4,6 +4,7 @@ import { Toolbar } from './components/Toolbar'
 import { StageIndicator } from './components/Toolbar/StageIndicator'
 import { NormalizeMenu } from './components/Toolbar/NormalizeMenu'
 import { IntentPinMenu } from './components/Toolbar/IntentPinMenu'
+import { TextEditor } from './components/Toolbar/TextEditor'
 import { useDrawingStore } from './store/drawingStore'
 
 export default function App() {
@@ -38,6 +39,7 @@ export default function App() {
       <Toolbar />
       <NormalizeMenu />
       <IntentPinMenu />
+      <TextEditor />
     </div>
   )
 }

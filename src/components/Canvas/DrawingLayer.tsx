@@ -9,23 +9,26 @@ import { useSelection } from '../../hooks/useSelection'
 import { useVectorEdit } from '../../hooks/useVectorEdit'
 import { useLockTool } from '../../hooks/useLockTool'
 import { useIntentPinTool } from '../../hooks/useIntentPinTool'
+import { usePolyline } from '../../hooks/usePolyline'
+import { useTextTool } from '../../hooks/useTextTool'
 import { resolveStrokePoints } from '../../geometry/graph'
 import type { Graph, SamplePoint, Stroke } from '../../types/geometry'
 import { buildRibbon, resampleCentripetalCatmullRom } from './strokeGeometry'
 import { MarchingAntsLine } from './MarchingAntsLine'
 import { LockFieldView } from './LockFieldView'
 import { IntentFieldView } from './IntentFieldView'
+import { TextLayer } from './TextLayer'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
 const SELECTION_COLOR = '#2f6fed'
 
-/** A smooth variable-width ribbon for a centerline polyline. */
-function RibbonMesh({ points, color }: { points: SamplePoint[]; color: string }) {
+/** A variable-width ribbon for a centerline polyline (smoothed unless `straight`). */
+function RibbonMesh({ points, color, straight }: { points: SamplePoint[]; color: string; straight?: boolean }) {
   const geometry = useMemo(() => {
-    const smooth = resampleCentripetalCatmullRom(points)
-    return buildRibbon(smooth)
-  }, [points])
+    const centerline = straight ? points : resampleCentripetalCatmullRom(points)
+    return buildRibbon(centerline)
+  }, [points, straight])
 
   if (!geometry.positions || !geometry.indices) return null
 
@@ -43,7 +46,7 @@ function RibbonMesh({ points, color }: { points: SamplePoint[]; color: string })
 /** Resolve a graph stroke to centerline points and render it (tinted when selected). */
 function StrokeView({ graph, stroke, selected }: { graph: Graph; stroke: Stroke; selected: boolean }) {
   const points = useMemo(() => resolveStrokePoints(graph, stroke), [graph, stroke])
-  return <RibbonMesh points={points} color={selected ? SELECTION_COLOR : stroke.color} />
+  return <RibbonMesh points={points} color={selected ? SELECTION_COLOR : stroke.color} straight={stroke.straight} />
 }
 
 /** Cosmetic anchor-point handles for the VECTOR edit tool (picking is on the plane). */
@@ -81,11 +84,13 @@ function InteractionPlane({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onDoubleClick,
 }: {
   enabled: boolean
   onPointerDown: PointerHandler
   onPointerMove: PointerHandler
   onPointerUp: () => void
+  onDoubleClick?: () => void
 }) {
   const ref = useRef<THREE.Mesh>(null)
 
@@ -106,6 +111,7 @@ function InteractionPlane({
       onPointerDown={enabled ? onPointerDown : undefined}
       onPointerMove={enabled ? onPointerMove : undefined}
       onPointerUp={enabled ? onPointerUp : undefined}
+      onDoubleClick={enabled ? onDoubleClick : undefined}
     >
       <planeGeometry args={[1, 1]} />
       {/* Receives raycasts but draws nothing. */}
@@ -121,6 +127,7 @@ export function DrawingLayer() {
   const lockPolygons = useDrawingStore((s) => s.lockPolygons)
   const intentPins = useDrawingStore((s) => s.intentPins)
   const pendingPin = useDrawingStore((s) => s.pendingPin)
+  const strokeColor = useDrawingStore((s) => s.strokeColor)
   const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
 
   const draw = useDrawing()
@@ -129,16 +136,20 @@ export function DrawingLayer() {
   const vectorEdit = useVectorEdit()
   const lockTool = useLockTool()
   const intentPinTool = useIntentPinTool()
+  const polyline = usePolyline()
+  const textTool = useTextTool()
 
   const selectedSet = useMemo(() => new Set(selectedStrokeIds), [selectedStrokeIds])
 
   const isSelectionTool = toolMode === 'SELECT' || toolMode === 'LASSO'
   const interactive =
     (toolMode === 'DRAW' ||
+      toolMode === 'POLYLINE' ||
       toolMode === 'ERASE' ||
       toolMode === 'VECTOR' ||
       toolMode === 'LASSO_LOCK' ||
       toolMode === 'INTENT_PIN' ||
+      toolMode === 'TEXT' ||
       isSelectionTool) &&
     !isSpaceDown
 
@@ -153,7 +164,11 @@ export function DrawingLayer() {
             ? lockTool
             : toolMode === 'INTENT_PIN'
               ? intentPinTool
-              : draw
+              : toolMode === 'POLYLINE'
+                ? polyline
+                : toolMode === 'TEXT'
+                  ? textTool
+                  : draw
 
   return (
     <>
@@ -162,13 +177,18 @@ export function DrawingLayer() {
         onPointerDown={handlers.onPointerDown}
         onPointerMove={handlers.onPointerMove}
         onPointerUp={handlers.onPointerUp}
+        onDoubleClick={toolMode === 'POLYLINE' ? polyline.onDoubleClick : undefined}
       />
       <LockFieldView locks={lockPolygons} />
       <IntentFieldView pins={intentPins} pending={pendingPin} />
+      <TextLayer />
       {graph.strokes.map((stroke) => (
         <StrokeView key={stroke.id} graph={graph} stroke={stroke} selected={selectedSet.has(stroke.id)} />
       ))}
       {draw.live && <RibbonMesh points={draw.live} color={draw.liveColor} />}
+      {toolMode === 'POLYLINE' && polyline.preview.length >= 2 && (
+        <RibbonMesh points={polyline.preview} color={strokeColor} straight />
+      )}
       {selection.outline && (
         <MarchingAntsLine points={selection.outline.points} closed={selection.outline.closed} />
       )}

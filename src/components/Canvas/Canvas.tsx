@@ -32,7 +32,8 @@ function useCanvasCursor(): string {
   return useMemo(() => {
     if (isPanning) return 'grabbing'
     if (isSpaceDown || toolMode === 'PAN') return 'grab'
-    if (toolMode === 'DRAW') return 'crosshair'
+    if (toolMode === 'DRAW' || toolMode === 'POLYLINE') return 'crosshair'
+    if (toolMode === 'TEXT') return 'text'
     if (toolMode === 'ERASE') return ERASER_CURSOR
     if (toolMode === 'SELECT' || toolMode === 'LASSO') return 'crosshair'
     if (toolMode === 'LASSO_LOCK') return 'crosshair'

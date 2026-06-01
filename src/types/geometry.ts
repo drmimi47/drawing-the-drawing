@@ -44,7 +44,19 @@ export interface Stroke {
   color: string
   path: PathPoint[]
   raw?: RawSample[]
-  // Reserved: curve?: 'line' | 'catmull' for per-stroke curve behavior.
+  /** Polyline strokes render with straight segments (no Catmull-Rom smoothing). */
+  straight?: boolean
+}
+
+/** A free-floating text annotation placed on the canvas (world-anchored). */
+export interface TextLabel {
+  id: string
+  x: number
+  y: number
+  text: string
+  color: string
+  /** Font size in world units (scales with zoom). */
+  size: number
 }
 
 /** A derived edge (segment between two consecutive path vertices). */

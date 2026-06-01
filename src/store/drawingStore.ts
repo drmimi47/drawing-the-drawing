@@ -1,5 +1,13 @@
 import { create } from 'zustand'
-import type { Graph, IntentPin, IntentType, LockPolygon, RawSample, SamplePoint } from '../types/geometry'
+import type {
+  Graph,
+  IntentPin,
+  IntentType,
+  LockPolygon,
+  RawSample,
+  SamplePoint,
+  TextLabel,
+} from '../types/geometry'
 import { emptyGraph } from '../types/geometry'
 import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
 import { segmentStrokesByPolygon } from '../geometry/clip'
@@ -15,6 +23,7 @@ import { simplifyRDP } from '../geometry/simplify'
 
 export type ToolMode =
   | 'DRAW'
+  | 'POLYLINE'
   | 'ERASE'
   | 'PAN'
   | 'SELECT'
@@ -22,6 +31,7 @@ export type ToolMode =
   | 'VECTOR'
   | 'LASSO_LOCK'
   | 'INTENT_PIN'
+  | 'TEXT'
 export type Stage = 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
 
 /** Tools that maintain (rather than clear) the current selection. */
@@ -29,6 +39,7 @@ const SELECTION_TOOLS = new Set<ToolMode>(['SELECT', 'LASSO'])
 
 let lockCounter = 0
 let pinCounter = 0
+let textCounter = 0
 
 const HISTORY_LIMIT = 100
 
@@ -37,6 +48,18 @@ interface HistoryEntry {
   graph: Graph
   lockPolygons: LockPolygon[]
   intentPins: IntentPin[]
+  textLabels: TextLabel[]
+}
+
+/** Transient text being placed/edited, or null. */
+export interface PendingText {
+  x: number
+  y: number
+  screenX: number
+  screenY: number
+  /** Existing label id when editing, else null for a new one. */
+  id: string | null
+  initial: string
 }
 
 /** Transient state while placing an intent pin (center → type → radius → commit). */
@@ -66,6 +89,10 @@ interface DrawingState {
   intentPins: IntentPin[]
   /** Transient pin being placed, or null. */
   pendingPin: PendingPin | null
+  /** Free-floating text annotations. */
+  textLabels: TextLabel[]
+  /** Transient text being placed/edited, or null. */
+  pendingText: PendingText | null
   /** Undo/redo stacks: snapshots of graph + locks + pins before each action. */
   past: HistoryEntry[]
   future: HistoryEntry[]
@@ -90,6 +117,10 @@ interface DrawingState {
   setPinRadius: (radius: number) => void
   commitPin: () => void
   cancelPin: () => void
+  // Text placement flow.
+  beginText: (x: number, y: number, screenX: number, screenY: number, id: string | null, initial: string) => void
+  commitText: (value: string) => void
+  cancelText: () => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
 
@@ -97,8 +128,8 @@ interface DrawingState {
   beginHistory: () => void
   /** Replace the graph without touching history (used mid-action, e.g. erasing). */
   setGraph: (graph: Graph) => void
-  /** Commit a finished freehand stroke (records one undo step). */
-  commitStroke: (points: SamplePoint[], color: string, raw?: RawSample[]) => void
+  /** Commit a finished stroke (records one undo step). `straight` = polyline. */
+  commitStroke: (points: SamplePoint[], color: string, raw?: RawSample[], straight?: boolean) => void
   /** Erase along the swept capsule (caller manages history for the drag). */
   eraseCapsule: (ax: number, ay: number, bx: number, by: number, r: number) => boolean
   undo: () => void
@@ -118,6 +149,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   lockPolygons: [],
   intentPins: [],
   pendingPin: null,
+  textLabels: [],
+  pendingText: null,
   past: [],
   future: [],
 
@@ -126,8 +159,9 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       toolMode: tool,
       // Leaving the selection tools clears the highlight so it doesn't linger.
       selectedStrokeIds: SELECTION_TOOLS.has(tool) ? state.selectedStrokeIds : [],
-      // Abandon any in-progress pin placement when leaving the pin tool.
+      // Abandon any in-progress pin/text placement when leaving those tools.
       pendingPin: tool === 'INTENT_PIN' ? state.pendingPin : null,
+      pendingText: tool === 'TEXT' ? state.pendingText : null,
     })),
   setStage: (stage) => set({ stage }),
   setColor: (color) => set({ strokeColor: color }),
@@ -219,6 +253,44 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       }
     }),
   cancelPin: () => set({ pendingPin: null }),
+
+  beginText: (x, y, screenX, screenY, id, initial) =>
+    set({ pendingText: { x, y, screenX, screenY, id, initial } }),
+  commitText: (value) =>
+    set((state) => {
+      const p = state.pendingText
+      if (!p) return {}
+      const text = value.trim()
+      // Editing an existing label.
+      if (p.id) {
+        const labels = text
+          ? state.textLabels.map((l) => (l.id === p.id ? { ...l, text } : l))
+          : state.textLabels.filter((l) => l.id !== p.id)
+        return {
+          past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+          future: [],
+          textLabels: labels,
+          pendingText: null,
+        }
+      }
+      // New label (ignore empty).
+      if (!text) return { pendingText: null }
+      const label: TextLabel = {
+        id: `text-${Date.now()}-${textCounter++}`,
+        x: p.x,
+        y: p.y,
+        text,
+        color: state.strokeColor,
+        size: 16,
+      }
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        textLabels: [...state.textLabels, label],
+        pendingText: null,
+      }
+    }),
+  cancelText: () => set({ pendingText: null }),
   setVertexPositions: (updates) =>
     set((state) => {
       const vertices = { ...state.graph.vertices }
@@ -232,11 +304,11 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   beginHistory: () =>
     set((state) => ({ past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT), future: [] })),
   setGraph: (graph) => set({ graph }),
-  commitStroke: (points, color, raw) =>
+  commitStroke: (points, color, raw, straight) =>
     set((state) => ({
       past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
       future: [],
-      graph: addStrokeToGraph(state.graph, points, color, raw),
+      graph: addStrokeToGraph(state.graph, points, color, raw, straight),
     })),
   eraseCapsule: (ax, ay, bx, by, r) => {
     const { graph } = get()
@@ -254,6 +326,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         graph: previous.graph,
         lockPolygons: previous.lockPolygons,
         intentPins: previous.intentPins,
+        textLabels: previous.textLabels,
         past,
         future: [...state.future, snapshot(state)].slice(-HISTORY_LIMIT),
       }
@@ -267,6 +340,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         graph: next.graph,
         lockPolygons: next.lockPolygons,
         intentPins: next.intentPins,
+        textLabels: next.textLabels,
         future,
         past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
       }
@@ -280,6 +354,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         graph: previous.graph,
         lockPolygons: previous.lockPolygons,
         intentPins: previous.intentPins,
+        textLabels: previous.textLabels,
         past,
       }
     }),
@@ -295,6 +370,12 @@ function snapshot(state: {
   graph: Graph
   lockPolygons: LockPolygon[]
   intentPins: IntentPin[]
+  textLabels: TextLabel[]
 }): HistoryEntry {
-  return { graph: state.graph, lockPolygons: state.lockPolygons, intentPins: state.intentPins }
+  return {
+    graph: state.graph,
+    lockPolygons: state.lockPolygons,
+    intentPins: state.intentPins,
+    textLabels: state.textLabels,
+  }
 }

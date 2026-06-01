@@ -96,6 +96,7 @@ export function addStrokeToGraph(
   points: SamplePoint[],
   color: string,
   raw?: RawSample[],
+  straight?: boolean,
 ): Graph {
   const vertices: Record<string, Vertex> = { ...graph.vertices }
 
@@ -145,6 +146,7 @@ export function addStrokeToGraph(
     color,
     path: newInserts.size > 0 ? rebuildPath(path, newInserts) : path,
     raw,
+    straight,
   }
 
   const strokes = graph.strokes.map((es) => {

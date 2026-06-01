@@ -58,7 +58,7 @@ export function IntentPinMenu() {
   // Radius-sizing hint.
   return (
     <div className="size-hint" style={{ left: pending.screenX, top: pending.screenY }}>
-      Move to size · click to place · Esc to cancel
+      Move to size · click to place
     </div>
   )
 }
