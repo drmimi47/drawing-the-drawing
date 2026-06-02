@@ -19,6 +19,7 @@ import { LockFieldView } from './LockFieldView'
 import { IntentFieldView } from './IntentFieldView'
 import { TextLayer } from './TextLayer'
 import { SnapIndicator } from './SnapIndicator'
+import { SnapGuideOverlay } from './SnapGuideOverlay'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
@@ -156,6 +157,7 @@ export function DrawingLayer() {
   const strokeColor = useDrawingStore((s) => s.strokeColor)
   const lineStyle = useDrawingStore((s) => s.lineStyle)
   const baseWidth = useDrawingStore((s) => s.baseWidth)
+  const activeSnapGuide = useDrawingStore((s) => s.activeSnapGuide)
   const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
 
   const draw = useDrawing()
@@ -169,9 +171,10 @@ export function DrawingLayer() {
 
   const selectedSet = useMemo(() => new Set(selectedStrokeIds), [selectedStrokeIds])
 
-  // Active object-snap target (polyline placement or vector-edit drag).
-  const snapTarget =
-    toolMode === 'POLYLINE' ? polyline.snap : toolMode === 'VECTOR' ? vectorEdit.snap : null
+  // Vector-edit drag uses the legacy blue square indicator. Polyline snap visuals
+  // are owned entirely by SnapGuideOverlay (green/magenta CAD guides + glyphs), so
+  // it doesn't double up with a blue square on endpoint snaps.
+  const snapTarget = toolMode === 'VECTOR' ? vectorEdit.snap : null
 
   const isSelectionTool = toolMode === 'SELECT' || toolMode === 'LASSO'
   const interactive =
@@ -231,6 +234,7 @@ export function DrawingLayer() {
       )}
       {toolMode === 'VECTOR' && <VectorHandles graph={graph} />}
       {snapTarget && <SnapIndicator snap={snapTarget} />}
+      {toolMode === 'POLYLINE' && <SnapGuideOverlay guide={activeSnapGuide} />}
     </>
   )
 }

@@ -70,25 +70,63 @@ function resolveSnap(
   const snapRadiusW = SNAP_THRESHOLD_PX / zoom
 
   // ── Priority 1: endpoint snap ───────────────────────────────────────────
+  // Candidates are committed graph vertices/midpoints (spatial index) AND the
+  // vertices of the in-progress polyline — so snapping engages mid-draw, before
+  // anything has been committed. The last placed vertex (P) is excluded: snapping
+  // the rubber band onto its own anchor would be a degenerate zero-length segment.
+  let epPos: { x: number; y: number } | null = null
+  let epVid: string | undefined
+  let epDistSq = snapRadiusW * snapRadiusW
+
   const ep = spatialIndex.nearest(raw.x, raw.y, snapRadiusW)
   if (ep) {
+    epPos = { x: ep.x, y: ep.y }
+    epVid = ep.vid ?? undefined
+    const dx = ep.x - raw.x
+    const dy = ep.y - raw.y
+    epDistSq = dx * dx + dy * dy
+  }
+  for (let i = 0; i < pts.length - 1; i++) {
+    const dx = pts[i].x - raw.x
+    const dy = pts[i].y - raw.y
+    const d = dx * dx + dy * dy
+    if (d < epDistSq) {
+      epDistSq = d
+      epPos = { x: pts[i].x, y: pts[i].y }
+      epVid = undefined
+    }
+  }
+  if (epPos) {
     const guide: SnapGuide | null =
       pts.length > 0
         ? {
             type: 'endpoint',
             fromPoint: [pts[pts.length - 1].x, pts[pts.length - 1].y],
-            toPoint: [ep.x, ep.y],
-            sourceVertexId: ep.vid ?? undefined,
+            toPoint: [epPos.x, epPos.y],
+            sourceVertexId: epVid,
           }
         : null
-    return { pos: { x: ep.x, y: ep.y }, snapTarget: ep, guide, isAdvanced: false }
+    return {
+      pos: epPos,
+      snapTarget: { x: epPos.x, y: epPos.y, kind: 'VERTEX', vid: epVid ?? null, edge: null },
+      guide,
+      isAdvanced: false,
+    }
   }
 
   // ── Priorities 2 & 3: require an active polyline session ────────────────
   if (pts.length > 0) {
     const P = pts[pts.length - 1]
     const perpThresh = (SNAP_THRESHOLD_PX * PERP_THRESHOLD_MULT) / zoom
-    const candidates = spatialIndex.nearbyEdgeEndpoints(raw.x, raw.y)
+    // Candidate reference edges = nearby committed edges PLUS every segment of the
+    // in-progress polyline. The active segments are always included (there are only
+    // a handful per session) so you can snap perpendicular/parallel to a line you
+    // just drew — the key behaviour that was missing before any stroke was committed.
+    const activeSegs: Array<{ key: string; a: { x: number; y: number }; b: { x: number; y: number } }> = []
+    for (let i = 0; i < pts.length - 1; i++) {
+      activeSegs.push({ key: `active:${i}`, a: pts[i], b: pts[i + 1] })
+    }
+    const candidates = [...spatialIndex.nearbyEdgeEndpoints(raw.x, raw.y), ...activeSegs]
 
     // ── Priority 2: perpendicular snap ──────────────────────────────────
     // Pick the candidate edge whose perp-line foot is closest to M.

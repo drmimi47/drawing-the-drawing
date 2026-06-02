@@ -2,7 +2,7 @@ METABALL SKETCH — Project Information Document
 ================================================================================
 Purpose: Onboarding reference for collaborators and LLM coding agents. Describes
 the project's intent, technical architecture, and complete current feature set.
-Last updated: 2026-06-01
+Last updated: 2026-06-02
 ================================================================================
  
 
@@ -66,6 +66,10 @@ All geometry is a Planar Straight-Line Graph (PSLG). Renders are a derived cache
                  x, y, width, height }                raster import with own transform
   Snapshot     { graph, lockPolygons, intentPins,
                  textLabels }                         undo/redo unit
+  SnapGuide    { type: 'endpoint'|'perpendicular'|    transient CAD snap guide
+                 'parallel'|'extension',               (polyline Smart Track);
+                 fromPoint: [x,y], toPoint: [x,y],     lives in store.activeSnapGuide,
+                 sourceEdgeId?, sourceVertexId? }      NOT part of undo history
 
 World coordinate system: origin (0,0) at page center, y-axis up, right-handed.
 Export flips y: fx(x) = x + W/2, fy(y) = H/2 - y (top-left origin, y down).
@@ -168,14 +172,54 @@ Snap threshold: SNAP_THRESHOLD_PX = 8 (screen pixels) ÷ camera.zoom → world
 units. Converts the activation radius into world space so the snap zone stays
 visually constant as the user zooms in or out.
 
+nearbyEdgeEndpoints(x, y) query (added for the CAD snap pipeline):
+  Returns every edge whose midpoint falls in the 3×3 cell block around (x, y) as
+  { key, a, b } (live endpoint position refs). This is the small local candidate
+  set the polyline pipeline evaluates for perpendicular/parallel snaps — O(1) cell
+  lookups, never a full-graph scan. Caller reads the refs synchronously in-frame.
+
+CAD GEOMETRIC MATH (src/geometry/snapMath.ts):
+  Pure, side-effect-free 2D world-space functions; every one guards degenerate
+  (zero-length / coincident) input by returning null (or the anchor) rather than
+  dividing by zero. EPS = 1e-10.
+    getProjectedPointOnLine(M, A, B) — foot of perpendicular from M onto the
+      INFINITE line through A,B (returns A when A≈B).
+    checkParallelSnap(P, M, A, B, angularThresholdRad) — is vector P→M nearly
+      parallel OR anti-parallel to edge A→B? Test is |cross(d̂, v̂)| = |sin θ| ≤
+      sin(threshold) (symmetric about 0° and 180°, no atan2). If so, returns M
+      projected onto the parallel ray from P; else null.
+    checkPerpendicularSnap(P, M, A, B, distanceThreshold) — builds the line
+      through P perpendicular to A→B (90°-rotated unit dir), projects M onto it,
+      and returns that foot iff |M − foot| ≤ distanceThreshold; else null.
+
 Active tools:
-  Polyline (usePolyline.ts) — probes the index on every pointer move (showing
-    the indicator before any vertices are placed) and on every click. If a target
-    is within threshold the cursor locks exactly to it; otherwise Shift-ortho
-    applies if held. Object snap takes priority over Shift-ortho.
-  Vector Edit (useVectorEdit.ts) — probes on every pointer move while dragging a
-    vertex, excluding that vertex and its own edges via the exclude set. Applies
-    the snapped position to setVertexPositions so connected strokes update live.
+  Polyline (usePolyline.ts) — the CAD snap pipeline (resolveSnap, a module-level
+    pure fn that reads spatialIndex via getState(), never during render). On every
+    pointer move AND every click it runs a sequential priority matrix; the first
+    hit wins, overrides the raw cursor with the snapped coordinate, and writes
+    store.activeSnapGuide (or clears it to null):
+      P1 ENDPOINT  — nearest committed vertex/midpoint (index) OR an in-progress
+                     polyline vertex within SNAP_THRESHOLD_PX/zoom; locks exactly.
+      P2 PERPENDICULAR — over candidate edges, the segment P→M forms 90° with an
+                     edge within (SNAP_THRESHOLD_PX·2.5)/zoom of its perp-line
+                     through P; locks M to that foot. Closest foot wins.
+      P3 PARALLEL  — over candidate edges, P→M runs within 6° of an edge; projects
+                     M onto the parallel ray from P. Smallest angular deviation
+                     (|sin θ|) wins.
+    P2/P3 require an active session (≥1 placed vertex) and are GUARDED so they
+    never run in the freehand Draw path. Critically, the candidate edge set is
+    nearbyEdgeEndpoints() PLUS every segment of the IN-PROGRESS polyline (and
+    in-progress vertices are P1 candidates) — so snapping engages mid-draw against
+    the line you are currently drawing, not only against already-committed strokes.
+    Shift-ortho still applies, but only when no object/advanced snap constrained
+    the position (an active perp/parallel snap suppresses it). Per-frame moves are
+    coalesced through one requestAnimationFrame; activeSnapGuide is flushed there
+    and cleared on reset / tool switch.
+  Vector Edit (useVectorEdit.ts) — probes nearest() on every pointer move while
+    dragging a vertex, excluding that vertex and its own edges via the exclude set.
+    Applies the snapped position to setVertexPositions so connected strokes update
+    live. (Vector Edit keeps the legacy blue SnapIndicator; Polyline's visuals are
+    owned entirely by the Smart Track overlay below.)
 
 SnapIndicator (components/Canvas/SnapIndicator.tsx):
   A lineLoop built once as a unit outline (half-extent = 1) and rescaled by
@@ -184,6 +228,28 @@ SnapIndicator (components/Canvas/SnapIndicator.tsx):
     SQUARE  (□) — 4-vertex lineLoop — for VERTEX / endpoint targets
     TRIANGLE (△) — 3-vertex lineLoop — for MIDPOINT targets
   renderOrder 40, depthTest false, frustumCulled false — always on top.
+  Now used ONLY by the Vector Edit drag (Polyline snaps render via SnapGuideOverlay,
+  so the blue square doesn't double up with the green endpoint glyph).
+
+SnapGuideOverlay — "Smart Track" guides (components/Canvas/SnapGuideOverlay.tsx):
+  Reads store.activeSnapGuide and renders professional CAD alignment cues for the
+  Polyline tool; renders nothing (clears instantly) when the guide is null. Lives
+  inside the R3F scene graph, so all guides track pan/zoom; everything is sized in
+  screen pixels (÷ camera.zoom each frame) so it stays crisp at any zoom/altitude.
+  Per guide type:
+    endpoint      — hollow green square at the snapped vertex (no track line).
+    perpendicular — bright green dashed line BOUNDED last-vertex→cursor + a right-
+                    angle ∟ glyph oriented to the guide direction.
+    parallel      — magenta dashed line EXTENDED far past both ends (reads as an
+                    infinite alignment track) + a parallel ∥ glyph.
+    extension     — extended green dashed track (reserved; not yet emitted by the
+                    pipeline).
+  Dashes are screen-constant via a ShaderMaterial: a per-vertex lineDistance
+  attribute accumulates world distance, the vertex shader multiplies by uZoom, and
+  the fragment shader discards gap fragments (DASH_PX/GAP_PX = 4/4) — same trick as
+  MarchingAntsLine. DashedGuideLine takes an `extend` flag (false = bounded to
+  from→to for perpendicular, true = ±EXTENSION_PX beyond both ends for parallel).
+  GUIDE_Z = 6, renderOrder 35–36, depthTest false, frustumCulled false.
 
 
 ISOLATED METABALL INTENT FIELD SYSTEM
@@ -377,8 +443,9 @@ SKETCH TOOLS
 - Draw: freehand, uniform width, RDP-simplified, centripetal Catmull-Rom ribbon,
   round caps/joins
 - Polyline: click-to-place, straight quads, miter joins; Shift-ortho constraint;
-  object snap to vertices/midpoints (snap priority > Shift-ortho); double-click
-  or Enter to finish; click near start to close
+  CAD object snaps with priority matrix Endpoint > Perpendicular > Parallel
+  (snap > Shift-ortho), snapping against committed geometry AND the in-progress
+  line being drawn; double-click or Enter to finish; click near start to close
 - Erase: swept-capsule, splits at intersections
 - Pan: dedicated mode (also Space)
 - Text: click to place; drag to reposition in Vector Edit mode
@@ -398,8 +465,11 @@ PIN TOOLS
   the region concentration grid (accurate % data, not pseudo data)
 
 SNAP INDICATORS
-- SnapIndicator: screen-constant lineLoop glyph at active snap target
+- SnapIndicator: screen-constant lineLoop glyph at active snap target (Vector Edit)
   SQUARE = vertex/endpoint, TRIANGLE = midpoint
+- SnapGuideOverlay "Smart Track" (Polyline): hollow green square (endpoint),
+  green dashed line + ∟ glyph (perpendicular), magenta dashed track + ∥ glyph
+  (parallel); screen-constant dashes, clears instantly when no snap is active
 
 IMPORT / EXPORT
 - Image import: raster underlay, aspect-fit centered inside page frame,
