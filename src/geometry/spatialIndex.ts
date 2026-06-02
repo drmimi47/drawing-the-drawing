@@ -21,18 +21,30 @@ import { deriveEdges } from './graph'
  * incremental edits: dragging a vertex only re-buckets that vertex and the
  * midpoints of its incident edges (a handful of cells), never the whole graph.
  *
+ * SEGMENT-CELL INTERSECTION INDEXING (Cluster 1 — long-edge blind-spot fix)
+ * Edges are no longer bucketed by their single midpoint cell. A long wall whose
+ * endpoints sit many cells away from its midpoint used to be invisible to the
+ * 3×3 `nearbyEdgeEndpoints` query everywhere except near its center, so edge
+ * snapping died along most of its length. Instead, every edge is registered into
+ * *all* grid cells its segment physically traverses (supercover voxel traversal),
+ * so edge detection fires uniformly from end to end. The midpoint is a point ON
+ * the segment, so its cell is always among the traversed cells — `nearest()`'s
+ * MIDPOINT snap still works (it distance-tests the true midpoint and ignores the
+ * extra cells an edge now occupies).
+ *
  * The grid stores feature *topology + position*, not pre-baked SnapPoint objects:
  *   cellVerts   cellKey -> Set<vertexId>     vertices whose position falls in a cell
- *   cellMids    cellKey -> Set<edgeKey>      edges whose midpoint falls in a cell
+ *   cellEdges   cellKey -> Set<edgeKey>      edges whose segment passes through a cell
  *   vertexPos   vertexId -> {x, y}           live vertex positions
  *   vertexCell  vertexId -> cellKey          reverse lookup: a vertex's current cell
  *   edges       edgeKey  -> [v0, v1]         edge endpoint ids
- *   edgeMidCell edgeKey  -> cellKey          reverse lookup: an edge midpoint's cell
+ *   edgeCells   edgeKey  -> Set<cellKey>     reverse lookup: every cell an edge occupies
  *   vertexEdges vertexId -> Set<edgeKey>     adjacency, so a moved vertex can
- *                                            re-bucket exactly its incident midpoints
- * A point lives in exactly one cell, so the reverse lookups are a single key (not
- * a list). SnapPoints are materialized lazily, only for the winning candidate of a
- * query, so per-move allocation churn stays near zero.
+ *                                            re-bucket exactly its incident edges
+ * A vertex lives in exactly one cell (single-key reverse lookup); an edge spans a
+ * set of cells, so its reverse lookup is a Set diffed on each move. SnapPoints are
+ * materialized lazily, only for the winning candidate of a query, so per-move
+ * allocation churn stays near zero.
  */
 
 export type SnapKind = 'VERTEX' | 'MIDPOINT'
@@ -62,11 +74,11 @@ export class SpatialGrid {
   private readonly cell: number
 
   private readonly cellVerts = new Map<string, Set<string>>()
-  private readonly cellMids = new Map<string, Set<string>>()
+  private readonly cellEdges = new Map<string, Set<string>>()
   private readonly vertexPos = new Map<string, Pos>()
   private readonly vertexCell = new Map<string, string>()
   private readonly edges = new Map<string, [string, string]>()
-  private readonly edgeMidCell = new Map<string, string>()
+  private readonly edgeCells = new Map<string, Set<string>>()
   private readonly vertexEdges = new Map<string, Set<string>>()
 
   constructor(cell = DEFAULT_CELL) {
@@ -75,6 +87,50 @@ export class SpatialGrid {
 
   private key(x: number, y: number): string {
     return `${Math.floor(x / this.cell)}:${Math.floor(y / this.cell)}`
+  }
+
+  /**
+   * Every grid cell key a segment a→b passes through (supercover voxel
+   * traversal, Amanatides & Woo). Walks cell-boundary crossings in parameter
+   * order, so it never skips a cell even for long, near-axis-aligned lines —
+   * this is what kills the long-edge edge-snap blind spot. Iteration is bounded
+   * by the Manhattan cell-distance between endpoints, so cost is proportional to
+   * an edge's length in cells (a handful for normal geometry).
+   */
+  private edgeCellKeys(ax: number, ay: number, bx: number, by: number): string[] {
+    const c = this.cell
+    let cx = Math.floor(ax / c)
+    let cy = Math.floor(ay / c)
+    const endCx = Math.floor(bx / c)
+    const endCy = Math.floor(by / c)
+    const keys: string[] = [`${cx}:${cy}`]
+    if (cx === endCx && cy === endCy) return keys
+
+    const dx = bx - ax
+    const dy = by - ay
+    const stepX = dx > 0 ? 1 : -1
+    const stepY = dy > 0 ? 1 : -1
+    // t-distance (along the segment, t∈[0,1]) to the next cell boundary on each
+    // axis, plus the t-increment for crossing one full cell. Axis with no motion
+    // gets Infinity so it never triggers a step.
+    const tDeltaX = dx !== 0 ? Math.abs(c / dx) : Infinity
+    const tDeltaY = dy !== 0 ? Math.abs(c / dy) : Infinity
+    let tMaxX = dx !== 0 ? ((stepX > 0 ? (cx + 1) * c : cx * c) - ax) / dx : Infinity
+    let tMaxY = dy !== 0 ? ((stepY > 0 ? (cy + 1) * c : cy * c) - ay) / dy : Infinity
+
+    const maxIter = Math.abs(endCx - cx) + Math.abs(endCy - cy) + 2
+    for (let i = 0; i < maxIter; i++) {
+      if (tMaxX < tMaxY) {
+        cx += stepX
+        tMaxX += tDeltaX
+      } else {
+        cy += stepY
+        tMaxY += tDeltaY
+      }
+      keys.push(`${cx}:${cy}`)
+      if (cx === endCx && cy === endCy) break
+    }
+    return keys
   }
 
   private addToCell(map: Map<string, Set<string>>, key: string, id: string): void {
@@ -122,9 +178,9 @@ export class SpatialGrid {
         this.vertexCell.set(id, newKey)
       }
     }
-    // Incident edge midpoints move with the vertex.
+    // Incident edges move with the vertex — re-bucket the cells they occupy.
     const incident = this.vertexEdges.get(id)
-    if (incident) for (const ek of incident) this.refreshEdgeMidpoint(ek)
+    if (incident) for (const ek of incident) this.refreshEdgeCells(ek)
   }
 
   /** Remove a vertex (and any edges still referencing it) from the index. */
@@ -139,23 +195,24 @@ export class SpatialGrid {
 
   // ---- Edges (midpoint snap targets) --------------------------------------
 
-  /** Insert an edge's midpoint snap target and wire its endpoint adjacency. */
+  /** Insert an edge into every cell it crosses and wire its endpoint adjacency. */
   addEdge(edgeKey: string, v0: string, v1: string): void {
     this.edges.set(edgeKey, [v0, v1])
     this.linkVertexEdge(v0, edgeKey)
     this.linkVertexEdge(v1, edgeKey)
-    this.refreshEdgeMidpoint(edgeKey)
+    this.refreshEdgeCells(edgeKey)
   }
 
-  /** Remove an edge's midpoint snap target and unwire its adjacency. */
+  /** Remove an edge from every cell it occupied and unwire its adjacency. */
   removeEdge(edgeKey: string): void {
     const ends = this.edges.get(edgeKey)
     if (ends) {
       this.unlinkVertexEdge(ends[0], edgeKey)
       this.unlinkVertexEdge(ends[1], edgeKey)
     }
-    this.removeFromCell(this.cellMids, this.edgeMidCell.get(edgeKey), edgeKey)
-    this.edgeMidCell.delete(edgeKey)
+    const cells = this.edgeCells.get(edgeKey)
+    if (cells) for (const k of cells) this.removeFromCell(this.cellEdges, k, edgeKey)
+    this.edgeCells.delete(edgeKey)
     this.edges.delete(edgeKey)
   }
 
@@ -172,31 +229,39 @@ export class SpatialGrid {
     if (set.size === 0) this.vertexEdges.delete(vid)
   }
 
-  /** Recompute an edge's midpoint cell, re-bucketing only if it changed cells. */
-  private refreshEdgeMidpoint(edgeKey: string): void {
+  /**
+   * Recompute the set of cells an edge occupies and re-bucket only the diff
+   * (cells it left vs. cells it newly entered). Called on insert and whenever an
+   * endpoint moves, so the hot drag path touches O(edge-length-in-cells) work.
+   */
+  private refreshEdgeCells(edgeKey: string): void {
     const ends = this.edges.get(edgeKey)
     if (!ends) return
     const a = this.vertexPos.get(ends[0])
     const b = this.vertexPos.get(ends[1])
     if (!a || !b) return
-    const newKey = this.key((a.x + b.x) / 2, (a.y + b.y) / 2)
-    const oldKey = this.edgeMidCell.get(edgeKey)
-    if (newKey !== oldKey) {
-      this.removeFromCell(this.cellMids, oldKey, edgeKey)
-      this.addToCell(this.cellMids, newKey, edgeKey)
-      this.edgeMidCell.set(edgeKey, newKey)
+    const newKeys = new Set(this.edgeCellKeys(a.x, a.y, b.x, b.y))
+    const oldKeys = this.edgeCells.get(edgeKey)
+    if (oldKeys) {
+      for (const k of oldKeys) if (!newKeys.has(k)) this.removeFromCell(this.cellEdges, k, edgeKey)
+      for (const k of newKeys) if (!oldKeys.has(k)) this.addToCell(this.cellEdges, k, edgeKey)
+    } else {
+      for (const k of newKeys) this.addToCell(this.cellEdges, k, edgeKey)
     }
+    this.edgeCells.set(edgeKey, newKeys)
   }
 
   // ---- Queries ------------------------------------------------------------
 
   /**
-   * Return all edges whose midpoints fall within the 3×3 cell neighborhood of
-   * (x, y). Used by the polyline snapping pipeline (Step 2) to build a small
-   * local candidate set for perpendicular and parallel evaluation — the midpoint
-   * bucket means only genuinely nearby edges are returned (O(1) cell lookups,
-   * not an O(N) full-graph scan). Returns live position references; caller must
-   * only read them synchronously within the same animation frame.
+   * Return every edge passing through the 3×3 cell neighborhood of (x, y). Used
+   * by the polyline snapping pipeline to build a small local candidate set for
+   * perpendicular / parallel / edge ("nearest on line") evaluation. Because edges
+   * are now bucketed into every cell they traverse (not just their midpoint cell),
+   * this reliably returns long edges that merely *pass near* the cursor — fixing
+   * the long-edge blind spot — while staying O(1) in cell lookups. Edges spanning
+   * multiple cells in the block are de-duplicated. Returns live position
+   * references; caller must read them synchronously within the same frame.
    */
   nearbyEdgeEndpoints(
     x: number,
@@ -205,11 +270,14 @@ export class SpatialGrid {
     const cx = Math.floor(x / this.cell)
     const cy = Math.floor(y / this.cell)
     const result: Array<{ key: string; a: { x: number; y: number }; b: { x: number; y: number } }> = []
+    const seen = new Set<string>()
     for (let qx = cx - 1; qx <= cx + 1; qx++) {
       for (let qy = cy - 1; qy <= cy + 1; qy++) {
-        const mids = this.cellMids.get(`${qx}:${qy}`)
-        if (!mids) continue
-        for (const ek of mids) {
+        const cellEdges = this.cellEdges.get(`${qx}:${qy}`)
+        if (!cellEdges) continue
+        for (const ek of cellEdges) {
+          if (seen.has(ek)) continue
+          seen.add(ek)
           const ends = this.edges.get(ek)
           if (!ends) continue
           const a = this.vertexPos.get(ends[0])
@@ -244,6 +312,10 @@ export class SpatialGrid {
     let bestMy = 0
     let bestMidD = r2
 
+    // An edge now lives in many cells, so it can appear in several cells of this
+    // query block — only its true midpoint matters, so test each edge once.
+    const seenMids = new Set<string>()
+
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cy = minCy; cy <= maxCy; cy++) {
         const key = `${cx}:${cy}`
@@ -265,9 +337,11 @@ export class SpatialGrid {
           }
         }
 
-        const mids = this.cellMids.get(key)
-        if (mids) {
-          for (const ek of mids) {
+        const cellEdges = this.cellEdges.get(key)
+        if (cellEdges) {
+          for (const ek of cellEdges) {
+            if (seenMids.has(ek)) continue
+            seenMids.add(ek)
             const ends = this.edges.get(ek)!
             if (exclude && (exclude.has(ends[0]) || exclude.has(ends[1]))) continue
             const a = this.vertexPos.get(ends[0])!

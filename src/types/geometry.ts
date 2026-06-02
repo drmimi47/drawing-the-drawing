@@ -136,12 +136,48 @@ export interface IntentPin {
 export const emptyGraph = (): Graph => ({ vertices: {}, strokes: [] })
 
 /**
+ * Lot boundary (Bloom restructure — Stage 1). A first-class, closed ring that is
+ * the master working area ("a canvas within the canvas"). `targetSqf` drives the
+ * advisory delta readout (never an auto-transform — Stage 1.3). `isLocked` freezes
+ * it as an immutable anchor (Foundation A).
+ */
+export interface Boundary {
+  /** Closed ring in world coordinates (first point not repeated at the end). */
+  ring: { x: number; y: number }[]
+  /** Designer's desired gross area, in the active unit; optional. */
+  targetSqf?: number
+  isLocked?: boolean
+}
+
+/**
+ * A circulation (hallway) centerline (Bloom restructure — Stage 2). The open
+ * polyline is offset to `width` (world units) into a corridor band; the union of
+ * all bands forms the keep-out mask that repels department fields downstream.
+ */
+export interface CirculationPath {
+  id: string
+  /** Open polyline centerline in world coordinates. */
+  centerline: { x: number; y: number }[]
+  /** Full corridor width in world units. */
+  width: number
+  isLocked?: boolean
+}
+
+/**
  * Active snap guide emitted by the polyline snapping pipeline (Step 1).
  *
  * Coordinates are stored as [x, y] tuples in world space. The overlay renderer
  * reads this to draw the appropriate visual indicator (dashed line, glyph, label).
  */
-export type SnapGuideType = 'endpoint' | 'perpendicular' | 'parallel' | 'extension'
+export type SnapGuideType =
+  | 'endpoint'
+  | 'midpoint'
+  | 'intersection'
+  | 'perpendicular'
+  | 'parallel'
+  | 'extension'
+  | 'tracking'
+  | 'edge'
 
 export interface SnapGuide {
   type: SnapGuideType

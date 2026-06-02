@@ -8,11 +8,12 @@ import type { SnapGuide } from '../../types/geometry'
  *
  * Draws CAD-style guidelines when the polyline snapping pipeline (Step 2) has
  * an active snap:
- *   - Endpoint:      hollow green square at the target vertex + green dashed
- *                     line from last placed vertex to the snapped point
+ *   - Endpoint:      hollow green square at the target vertex
+ *   - Midpoint:      hollow green triangle at the exact edge centre
+ *   - Intersection:  green ✕ at the (apparent) crossing of two lines
  *   - Perpendicular: bright green dashed line P→cursor + right-angle ∟ glyph
  *   - Parallel:      magenta dashed line along the parallel ray + ∥ glyph
- *   - Extension:     green dashed line along the extension direction
+ *   - Extension:     green dashed track along the last segment's trajectory
  *
  * All geometry lives inside the R3F scene graph and respects the orthographic
  * camera's pan/zoom transforms. Line dashes and glyphs are sized in screen
@@ -26,9 +27,9 @@ const COLOR_MAGENTA = '#e879f9'  // parallel guides
 
 // ─── Screen-constant sizing ──────────────────────────────────────────────────
 /** Half-extent of glyphs in screen pixels. */
-const GLYPH_HALF_PX = 7
+export const GLYPH_HALF_PX = 7
 /** Z-depth for overlays — above strokes (1), above selection ants (30). */
-const GUIDE_Z = 6
+export const GUIDE_Z = 6
 /** Extension length (px) beyond toPoint for dashed lines. */
 const EXTENSION_PX = 2000
 
@@ -83,13 +84,29 @@ const ENDPOINT_SQUARE_PTS = new Float32Array([
   -1, -1, 0,   1, -1, 0,   1, 1, 0,   -1, 1, 0,
 ])
 
+/** Edge ("on line") glyph — hollow green diamond (45°-rotated square). */
+const EDGE_DIAMOND_PTS = new Float32Array([
+  0, 1.25, 0,   1.25, 0, 0,   0, -1.25, 0,   -1.25, 0, 0,
+])
+
+/** Midpoint glyph — hollow green triangle (△), centroid-centered. */
+const MIDPOINT_TRIANGLE_PTS = new Float32Array([
+  0, 0.9, 0,   -0.78, -0.45, 0,   0.78, -0.45, 0,
+])
+
+/** Intersection glyph — green ✕ (two crossing diagonals). Drawn as lineSegments. */
+const INTERSECTION_X_PTS = new Float32Array([
+  -0.9, -0.9, 0,   0.9, 0.9, 0,    // ╱
+  -0.9, 0.9, 0,    0.9, -0.9, 0,    // ╲
+])
+
 // ─── Sub-component: dashed guide line ────────────────────────────────────────
 
 /**
  * A dashed line that extends from `from` through `to` and well beyond, giving
  * the impression of an infinite track guide. Dashes are screen-constant.
  */
-function DashedGuideLine({
+export function DashedGuideLine({
   from,
   to,
   color,
@@ -310,6 +327,96 @@ function EndpointGlyph({ position }: { position: [number, number] }) {
   )
 }
 
+// ─── Sub-component: edge ("on line") diamond glyph ───────────────────────────
+
+function EdgeGlyph({ position }: { position: [number, number] }) {
+  const ref = useRef<THREE.LineLoop>(null)
+
+  const geometry = useMemo(() => {
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(EDGE_DIAMOND_PTS, 3))
+    return g
+  }, [])
+
+  useEffect(() => () => geometry.dispose(), [geometry])
+
+  useFrame((state) => {
+    const obj = ref.current
+    if (!obj) return
+    const zoom = (state.camera as THREE.OrthographicCamera).zoom || 1
+    const s = GLYPH_HALF_PX / zoom
+    obj.position.set(position[0], position[1], GUIDE_Z)
+    obj.scale.set(s, s, 1)
+  })
+
+  return (
+    <lineLoop ref={ref} geometry={geometry} renderOrder={36} frustumCulled={false}>
+      <lineBasicMaterial color={COLOR_GREEN} depthTest={false} toneMapped={false} />
+    </lineLoop>
+  )
+}
+
+// ─── Sub-component: midpoint triangle glyph ──────────────────────────────────
+
+function MidpointGlyph({ position }: { position: [number, number] }) {
+  const ref = useRef<THREE.LineLoop>(null)
+
+  const geometry = useMemo(() => {
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(MIDPOINT_TRIANGLE_PTS, 3))
+    return g
+  }, [])
+
+  useEffect(() => () => geometry.dispose(), [geometry])
+
+  useFrame((state) => {
+    const obj = ref.current
+    if (!obj) return
+    const zoom = (state.camera as THREE.OrthographicCamera).zoom || 1
+    const s = GLYPH_HALF_PX / zoom
+    obj.position.set(position[0], position[1], GUIDE_Z)
+    obj.scale.set(s, s, 1)
+  })
+
+  return (
+    <lineLoop ref={ref} geometry={geometry} renderOrder={36} frustumCulled={false}>
+      <lineBasicMaterial color={COLOR_GREEN} depthTest={false} toneMapped={false} />
+    </lineLoop>
+  )
+}
+
+// ─── Sub-component: intersection ✕ glyph ─────────────────────────────────────
+
+function IntersectionGlyph({ position }: { position: [number, number] }) {
+  const lineObj = useMemo(() => {
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(INTERSECTION_X_PTS, 3))
+    const mat = new THREE.LineBasicMaterial({
+      color: COLOR_GREEN,
+      depthTest: false,
+      toneMapped: false,
+    })
+    const obj = new THREE.LineSegments(g, mat)
+    obj.renderOrder = 36
+    obj.frustumCulled = false
+    return obj
+  }, [])
+
+  useEffect(() => () => {
+    lineObj.geometry.dispose()
+    ;(lineObj.material as THREE.Material).dispose()
+  }, [lineObj])
+
+  useFrame((state) => {
+    const zoom = (state.camera as THREE.OrthographicCamera).zoom || 1
+    const s = GLYPH_HALF_PX / zoom
+    lineObj.position.set(position[0], position[1], GUIDE_Z)
+    lineObj.scale.set(s, s, 1)
+  })
+
+  return <primitive object={lineObj} />
+}
+
 // ─── Main overlay component ──────────────────────────────────────────────────
 
 /**
@@ -325,6 +432,18 @@ export function SnapGuideOverlay({ guide }: { guide: SnapGuide | null }) {
     case 'endpoint':
       // Hollow green square at the snapped vertex — no track line.
       return <EndpointGlyph position={toPoint} />
+
+    case 'midpoint':
+      // Hollow green triangle at the exact edge centre — no track line.
+      return <MidpointGlyph position={toPoint} />
+
+    case 'intersection':
+      // Green ✕ at the (apparent) crossing of two lines — no track line.
+      return <IntersectionGlyph position={toPoint} />
+
+    case 'edge':
+      // Hollow green diamond on the existing line — no track line.
+      return <EdgeGlyph position={toPoint} />
 
     case 'perpendicular':
       // Bounded dashed line (last vertex → cursor) + right-angle glyph.
@@ -346,6 +465,11 @@ export function SnapGuideOverlay({ guide }: { guide: SnapGuide | null }) {
 
     case 'extension':
       return <DashedGuideLine from={fromPoint} to={toPoint} color={COLOR_GREEN} extend />
+
+    case 'tracking':
+      // O-TRACK visuals (✛ anchors + alignment rays) are owned by TrackingOverlay,
+      // which reads store.trackedPoints — nothing to draw from the guide alone.
+      return null
 
     default:
       return null

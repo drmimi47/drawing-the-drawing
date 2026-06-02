@@ -3,6 +3,7 @@ import type { ThreeEvent } from '@react-three/fiber'
 import { useDrawingStore } from '../store/drawingStore'
 import type { RawSample, SamplePoint } from '../types/geometry'
 import { simplifyRDP } from '../geometry/simplify'
+import { clampToPage } from '../geometry/page'
 import { rawToStrokePoints } from '../components/Canvas/strokeGeometry'
 
 /**
@@ -91,8 +92,11 @@ export function useDrawing() {
 
       drawingRef.current = true
       startTimeRef.current = performance.now()
-      rawRef.current = [{ x: e.point.x, y: e.point.y, pressure: 0, t: 0 }]
-      lastSampleRef.current = { x: e.point.x, y: e.point.y }
+      // Clamp into the artboard so strokes can't be created out in the grey workspace.
+      const { pageWidth, pageHeight } = useDrawingStore.getState()
+      const c = clampToPage({ x: e.point.x, y: e.point.y }, pageWidth, pageHeight)
+      rawRef.current = [{ x: c.x, y: c.y, pressure: 0, t: 0 }]
+      lastSampleRef.current = { x: c.x, y: c.y }
       setLive(rawToStrokePoints(rawRef.current, baseWidth))
     },
     [baseWidth],
@@ -101,7 +105,8 @@ export function useDrawing() {
   const onPointerMove = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
       if (!drawingRef.current) return
-      lastSampleRef.current = { x: e.point.x, y: e.point.y }
+      const { pageWidth, pageHeight } = useDrawingStore.getState()
+      lastSampleRef.current = clampToPage({ x: e.point.x, y: e.point.y }, pageWidth, pageHeight)
       schedule()
     },
     [schedule],

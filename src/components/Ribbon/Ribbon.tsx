@@ -10,18 +10,14 @@ import {
   MousePointer2,
   Lock,
   MapPin,
-  Upload,
-  Trash2,
+  Download,
   FileCode,
   Image as ImageIcon,
   FileText,
-  Map as MapIcon,
-  Sparkles,
   PenLine,
 } from 'lucide-react'
 import { useDrawingStore, type ToolMode } from '../../store/drawingStore'
 import { LINEWEIGHTS, type LineStyle } from '../../types/geometry'
-import { importUnderlay } from '../../io/importUnderlay'
 import { exportSVG, exportPNG, exportPDF } from '../../io/exportDrawing'
 import './Ribbon.css'
 
@@ -29,10 +25,12 @@ import './Ribbon.css'
  * Compact single-row tool rail.
  *
  * Replaces the two-row Word/Revit ribbon with a ~46px horizontal strip.
- * Tools are grouped by workflow stage with thin separators. Import and Color
+ * Tools are grouped by workflow stage with thin separators. Color/Pen/Export
  * open floating panels; every other button is a direct tool toggle.
  *
- * Layout: [Import▼] | Draw Poly Pan Erase Text | Marquee Lasso Edit Lock | IntentPin | [Color▼] | ─── | Generate
+ * Layout: Pan | Scribble Polyline Erase Edit | Text Marquee Lasso Lock | IntentPin | [Color▼] [Pen▼] [Export▼]
+ * (In the Lot Boundary layer the primary group leads with Polyline.) Generate
+ * lives in the right-panel layer hierarchy, not the rail.
  */
 
 interface ToolDef {
@@ -41,30 +39,41 @@ interface ToolDef {
   Icon: typeof Pencil
 }
 
-const SKETCH_TOOLS: ToolDef[] = [
-  { key: 'DRAW', label: 'Draw', Icon: Pencil },
-  { key: 'POLYLINE', label: 'Polyline', Icon: Spline },
-  { key: 'PAN', label: 'Pan', Icon: Hand },
-  { key: 'ERASE', label: 'Erase', Icon: Eraser },
-  { key: 'TEXT', label: 'Text', Icon: Type },
-]
+/** First group: navigation. */
+const PAN_TOOL: ToolDef = { key: 'PAN', label: 'Pan', Icon: Hand }
 
-const NORMALIZE_TOOLS: ToolDef[] = [
+/** Second group: the primary draw/edit tools. */
+const SCRIBBLE_TOOL: ToolDef = { key: 'DRAW', label: 'Scribble', Icon: Pencil }
+const POLYLINE_TOOL: ToolDef = { key: 'POLYLINE', label: 'Polyline', Icon: Spline }
+const ERASE_TOOL: ToolDef = { key: 'ERASE', label: 'Erase', Icon: Eraser }
+const EDIT_TOOL: ToolDef = { key: 'VECTOR', label: 'Edit', Icon: MousePointer2 }
+
+const PRIMARY_DEFAULT: ToolDef[] = [SCRIBBLE_TOOL, POLYLINE_TOOL, ERASE_TOOL, EDIT_TOOL]
+/** In the Lot Boundary layer, Polyline leads (it's the boundary-tracing tool). */
+const PRIMARY_BOUNDARY: ToolDef[] = [POLYLINE_TOOL, SCRIBBLE_TOOL, ERASE_TOOL, EDIT_TOOL]
+
+/** Third group: the rest, in their existing order. */
+const REST_TOOLS: ToolDef[] = [
+  { key: 'TEXT', label: 'Text', Icon: Type },
   { key: 'SELECT', label: 'Marquee', Icon: BoxSelect },
   { key: 'LASSO', label: 'Lasso', Icon: Lasso },
-  { key: 'VECTOR', label: 'Edit', Icon: MousePointer2 },
   { key: 'LASSO_LOCK', label: 'Lock', Icon: Lock },
 ]
 
 const PRESET_COLORS = ['#1a1a1a', '#e23b3b', '#2f6fed', '#1f9d55', '#e8852b']
 
+/** Creation/edit tools disabled in the Context layer (map setup only). */
+const CONTEXT_DISABLED = new Set<ToolMode>(['DRAW', 'POLYLINE', 'ERASE', 'TEXT'])
+
 function ToolBtn({ tool }: { tool: ToolDef }) {
   const toolMode = useDrawingStore((s) => s.toolMode)
   const setTool = useDrawingStore((s) => s.setTool)
+  const activeLayer = useDrawingStore((s) => s.activeLayer)
   const setShowIntentLabels = useDrawingStore((s) => s.setShowIntentLabels)
   const setShowIntentGrid = useDrawingStore((s) => s.setShowIntentGrid)
   const { key, label, Icon } = tool
   const active = toolMode === key
+  const disabled = activeLayer === 'CONTEXT' && CONTEXT_DISABLED.has(key)
   // Hovering Intent Pin previews the pin labels AND the region concentration grid.
   const hoverIntent = (show: boolean) => {
     setShowIntentLabels(show)
@@ -75,10 +84,11 @@ function ToolBtn({ tool }: { tool: ToolDef }) {
       type="button"
       className={`rail-btn${active ? ' is-active' : ''}`}
       aria-pressed={active}
-      title={label}
+      disabled={disabled}
+      title={disabled ? `${label} — available after the Context layer` : label}
       onClick={() => setTool(key)}
-      onMouseEnter={key === 'INTENT_PIN' ? () => hoverIntent(true) : undefined}
-      onMouseLeave={key === 'INTENT_PIN' ? () => hoverIntent(false) : undefined}
+      onMouseEnter={key === 'INTENT_PIN' && !disabled ? () => hoverIntent(true) : undefined}
+      onMouseLeave={key === 'INTENT_PIN' && !disabled ? () => hoverIntent(false) : undefined}
     >
       <Icon size={16} strokeWidth={1.75} />
       <span className="rail-btn-label">{label}</span>
@@ -86,16 +96,10 @@ function ToolBtn({ tool }: { tool: ToolDef }) {
   )
 }
 
-function ImportDropdown() {
-  const setUnderlay = useDrawingStore((s) => s.setUnderlay)
-  const clearUnderlay = useDrawingStore((s) => s.clearUnderlay)
-  const hasUnderlay = useDrawingStore((s) => s.underlay !== null)
-  const mapActive = useDrawingStore((s) => s.mapActive)
-  const toggleMap = useDrawingStore((s) => s.toggleMap)
-  const fileRef = useRef<HTMLInputElement>(null)
+/** Export menu (SVG / PNG / PDF). Underlay import + map moved to the right panel. */
+function ExportDropdown() {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     const h = (e: MouseEvent) => {
@@ -105,57 +109,20 @@ function ImportDropdown() {
     return () => document.removeEventListener('mousedown', h)
   }, [])
 
-  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setBusy(true)
-    try {
-      const { src, width, height } = await importUnderlay(file)
-      setUnderlay(src, width, height)
-      setOpen(false)
-    } catch (err) {
-      console.error('Underlay import failed:', err)
-    } finally {
-      setBusy(false)
-    }
-  }
-
   return (
     <div ref={wrapRef} className="rail-dropdown-wrap">
       <button
         type="button"
         className={`rail-btn${open ? ' is-active' : ''}`}
-        title="Import / Export / Map"
+        title="Export"
         onClick={() => setOpen((o) => !o)}
       >
-        <Upload size={16} strokeWidth={1.75} />
-        <span className="rail-btn-label">Import</span>
+        <Download size={16} strokeWidth={1.75} />
+        <span className="rail-btn-label">Export</span>
       </button>
 
       {open && (
         <div className="rail-float-panel">
-          <div className="rail-float-label">Underlay</div>
-          <button
-            type="button"
-            className="rail-float-item"
-            onClick={() => fileRef.current?.click()}
-            disabled={busy}
-          >
-            <Upload size={13} strokeWidth={1.75} />
-            {busy ? 'Loading…' : 'Import file'}
-          </button>
-          <button
-            type="button"
-            className="rail-float-item"
-            onClick={clearUnderlay}
-            disabled={!hasUnderlay}
-          >
-            <Trash2 size={13} strokeWidth={1.75} />
-            Remove underlay
-          </button>
-
-          <div className="rail-float-divider" />
           <div className="rail-float-label">Export</div>
           <button type="button" className="rail-float-item" onClick={() => { exportSVG(); setOpen(false) }}>
             <FileCode size={13} strokeWidth={1.75} />
@@ -169,26 +136,6 @@ function ImportDropdown() {
             <FileText size={13} strokeWidth={1.75} />
             Export PDF
           </button>
-
-          <div className="rail-float-divider" />
-          <div className="rail-float-label">Geospatial</div>
-          <button
-            type="button"
-            className={`rail-float-item${mapActive ? ' is-active' : ''}`}
-            aria-pressed={mapActive}
-            onClick={() => { toggleMap(); setOpen(false) }}
-          >
-            <MapIcon size={13} strokeWidth={1.75} />
-            {mapActive ? 'Close map' : 'Open map'}
-          </button>
-
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/pdf,image/*"
-            onChange={onFile}
-            style={{ display: 'none' }}
-          />
         </div>
       )}
     </div>
@@ -344,15 +291,17 @@ function PenDropdown() {
 }
 
 export function Ribbon() {
+  const activeLayer = useDrawingStore((s) => s.activeLayer)
+  const primaryTools = activeLayer === 'BOUNDARY' ? PRIMARY_BOUNDARY : PRIMARY_DEFAULT
   return (
     <div className="toolbar-rail">
-      <ImportDropdown />
+      <ToolBtn tool={PAN_TOOL} />
 
       <div className="rail-sep" />
-      {SKETCH_TOOLS.map((t) => <ToolBtn key={t.key} tool={t} />)}
+      {primaryTools.map((t) => <ToolBtn key={t.key} tool={t} />)}
 
       <div className="rail-sep" />
-      {NORMALIZE_TOOLS.map((t) => <ToolBtn key={t.key} tool={t} />)}
+      {REST_TOOLS.map((t) => <ToolBtn key={t.key} tool={t} />)}
 
       <div className="rail-sep" />
       <ToolBtn tool={{ key: 'INTENT_PIN', label: 'Intent Pin', Icon: MapPin }} />
@@ -360,13 +309,7 @@ export function Ribbon() {
       <div className="rail-sep" />
       <ColorDropdown />
       <PenDropdown />
-
-      <div className="rail-spacer" />
-
-      <button type="button" className="rail-btn rail-generate" disabled title="Phase 2 — coming soon">
-        <Sparkles size={16} strokeWidth={1.75} />
-        <span className="rail-btn-label">Generate</span>
-      </button>
+      <ExportDropdown />
     </div>
   )
 }

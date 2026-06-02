@@ -62,6 +62,56 @@ export function checkParallelSnap(
 }
 
 /**
+ * Closest point on the FINITE segment A–B to M (clamped to the endpoints), with
+ * its distance to M. Used for edge ("nearest on line") snapping. Returns A for a
+ * degenerate zero-length segment.
+ */
+export function nearestPointOnSegment(M: Vec2, A: Vec2, B: Vec2): { x: number; y: number; dist: number } {
+  const dx = B.x - A.x
+  const dy = B.y - A.y
+  const len2 = dx * dx + dy * dy
+  let t = 0
+  if (len2 >= EPS) {
+    t = ((M.x - A.x) * dx + (M.y - A.y) * dy) / len2
+    t = t < 0 ? 0 : t > 1 ? 1 : t
+  }
+  const x = A.x + t * dx
+  const y = A.y + t * dy
+  return { x, y, dist: Math.hypot(M.x - x, M.y - y) }
+}
+
+/**
+ * Intersection of two INFINITE lines, one through A,B and one through C,D.
+ * Returns null when the lines are parallel or colinear (no single crossing).
+ *
+ * Powers "apparent intersection" snapping: the crossing can lie far outside both
+ * source segments (e.g. where two walls would meet if extended), so the caller
+ * gates acceptance by the cursor's proximity to the returned point, not by
+ * whether it lies on either segment.
+ */
+export function getLinesIntersection2D(A: Vec2, B: Vec2, C: Vec2, D: Vec2): Vec2 | null {
+  const d1x = B.x - A.x
+  const d1y = B.y - A.y
+  const d2x = D.x - C.x
+  const d2y = D.y - C.y
+  // Cross of the two direction vectors; zero ⇒ parallel/colinear.
+  const denom = d1x * d2y - d1y * d2x
+  if (Math.abs(denom) < EPS) return null
+  const t = ((C.x - A.x) * d2y - (C.y - A.y) * d2x) / denom
+  return { x: A.x + t * d1x, y: A.y + t * d1y }
+}
+
+/**
+ * Constrain point P to a horizontal or vertical line through `anchor` — whichever
+ * axis the displacement is larger along (the standard Shift-drag ortho lock).
+ */
+export function snapOrtho(anchor: Vec2, p: Vec2): { x: number; y: number } {
+  const dx = p.x - anchor.x
+  const dy = p.y - anchor.y
+  return Math.abs(dx) >= Math.abs(dy) ? { x: p.x, y: anchor.y } : { x: anchor.x, y: p.y }
+}
+
+/**
  * Check if cursor M is within `distanceThreshold` (world units) of the line
  * through P that is perpendicular to reference edge A→B. If so, return the
  * exact foot of perpendicular from M to that line (the snapped coordinate).

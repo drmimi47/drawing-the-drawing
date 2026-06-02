@@ -1,0 +1,383 @@
+================================================================================
+BLOOM SYSTEM RESTRUCTURE SPECIFICATION (V1 — REFINED)
+File Name: restructure_v1.txt
+Target Audience: urban planners / improving block diagrams / LLM Coding Agents / Core Systems Architects
+Status: Implementation spec. Geographically & topologically bound. Each stage is
+        broken into ordered SUB-STAGES sized for one focused implementation pass.
+--------------------------------------------------------------------------------
+PROVENANCE: This refines the original restructure_v1 against the earlier first-pass
+(restructure.txt, now deleted — its content is fully merged here). The "CONFLICTS
+RESOLVED" log at the bottom records every reconciliation and every place a better
+approach was substituted, so nothing from either source is silently lost.
+================================================================================
+
+
+0. EXECUTIVE SYSTEM ARCHITECTURE MANDATE
+--------------------------------------------------------------------------------
+Every stage operates on PURE VECTOR GEOMETRY + JSON METADATA + REAL-WORLD SPATIAL
+COUPLING. No destructive rasterization of the model itself (mask/SDF *textures* are
+allowed as ephemeral GPU caches — see Stage 3 — but they are derived, never the
+source of truth). Every polygon, centerline, field anchor, and room node is a
+persistent, serialized JSON type in the Zustand store (drawingStore.ts).
+
+This guarantees NON-DESTRUCTIVE, MULTI-PASS iterative refinement: a designer or an
+LLM agent can revisit any upstream layer, mutate structural geometry, and let the
+change CASCADE down the constraint stack without wiping downstream intent. The
+right-panel Layer Hierarchy (Foundation A) is the navigation surface for that loop.
+
+THE 6-LAYER CONSTRAINT-ACCUMULATING PIPELINE (Stage 0 added; see CONFLICTS log #1):
+  STAGE 0  CONTEXT      → STAGE 1  LOT BOUNDARY → STAGE 2  CIRCULATION
+        → STAGE 3  DEPARTMENTS → STAGE 4  ROOMS → STAGE 5  LLM CO-RESOLUTION (FINAL)
+
+GUIDING PRINCIPLE: constraints only ever get TIGHTER descending the pipeline. The
+app is "smart" because it ENFORCES this automatically (auto-offset hallways, auto-
+union the circulation network, auto-clip/repel fields, auto-pack rooms, advisory
+area deltas) instead of leaving it to the user's hand.
+
+
+FOUNDATION A — RIGHT PANEL: LAYER HIERARCHY & AREA-LOCK SYSTEM
+--------------------------------------------------------------------------------
+Foundational and cross-cutting: build this first; every stage plugs into it. It is
+TWO things in one panel (merge of v1 §1 + the first-pass "layer system" note):
+
+  (1) LAYER NAVIGATOR — a vertical stack of the pipeline layers (Context, Boundary,
+      Circulation, Departments, Rooms, Generate). The user works top-down but may
+      click any layer to REVISIT it; editing an upstream layer re-derives everything
+      below it. These are NOT Photoshop paint layers — each carries METADATA that
+      keeps the others intelligent (e.g. retype a department's room count and the
+      rooms layer regenerates). The active layer gates which tools are live (replaces
+      a free-for-all toolbar with a guided wizard).
+
+  (2) AREA-LOCK / CONSTRAINTS — every committed feature block (a boundary, a corridor,
+      a department polygon, a room node) exposes a Lock toggle that sets JSON
+      `isLocked: true`. Locking is an ABSOLUTE immutability guard:
+        * Marching-squares / field solvers may not deform a locked department's bounds.
+        * Upstream ripple (rescale, re-pack) treats locked vertices as fixed anchors;
+          adjacent FLEXIBLE geometry absorbs the deformation instead.
+        * Stage 5 LLM treats locked zones as influence-1.0 hard vectors: it may
+          attach to them but never move, delete, or re-allocate inside them.
+
+  Sub-stages (implement in order):
+    A.1  store.stage union extended to CONTEXT | BOUNDARY | CIRCULATION | DEPARTMENTS
+         | ROOMS | GENERATE; a setStage-gated tool map. (SKETCH/NORMALIZE survive as
+         in-layer helpers.)
+    A.2  Right-panel Layer Navigator component: list, active highlight, click-to-
+         revisit, per-layer status (e.g. "Boundary: 38,200 SQF").
+    A.3  Feature-level `isLocked` metadata + toggle UI on each feature row.
+    A.4  Lock-enforcement guards wired into the three consumers (field solver,
+         ripple/rescale, LLM serializer). Ship A.4 incrementally as each consumer
+         stage lands — don't block A on Stage 3/5 existing.
+
+  CLARIFICATION (CONFLICTS log #8): this feature-level `isLocked` is DISTINCT from the
+  existing spatial LockPolygon (geometry/locks.ts, a feathered soft-influence region).
+  They coexist: LockPolygon = "soften mutation in this area"; isLocked = "this specific
+  feature is frozen." Different scopes, different data.
+
+
+STAGE 0 — CONTEXT  [NEW — merged from first-pass note; absent in original v1]
+--------------------------------------------------------------------------------
+GOAL: choose the substrate the whole plan is drawn against, before any geometry.
+
+  0.1  Context choice: MAP (Mapbox underlay for a real site) vs BLANK SHEET (an
+       untethered white artboard). Stored as store.context = 'MAP' | 'BLANK'.
+  0.2  Map-in-canvas-bounds: today MapView fills the whole screen; confine it to the
+       canvas area only (the white workspace rect), so chrome/panels stay clear.
+       (CONFLICTS log #4 — first-pass note: "map ... needs to load only within the
+       canvas bounds. right now it takes up the whole screen.")
+  0.3  Map freeze + control hide: once the user moves on from Context/Boundary, FREEZE
+       the map (lock pan/zoom) and hide the map controls so the underlay becomes a
+       quiet tracing backdrop. Re-enter the Context layer to unfreeze.
+
+EXISTS: MapView, mapActive, underlay opacity (dimmer), metersPerWorldUnit.
+NEW:    store.context; canvas-bounded map container; freeze + control-hide affordance.
+RISK:   low–med. Map container reflow is the only fiddly bit (keep world<->screen
+        coordinate mapping intact when the map no longer fills the viewport).
+STATUS: IMPLEMENTED — Context substrate (Map/Blank) in the right panel; the map is
+        confined to the page-sheet (artboard) rect. Map is a DIM UNDERLAY beneath a
+        transparent R3F canvas (gl alpha; scene background removed; grey from
+        .canvas-area). store.mapDim + a right-panel slider control the white-fade
+        dimmer.
+        INTERACTION MODEL (by layer, via the map overlay's z-index):
+          • CONTEXT (map setup only): overlay z-index 3 ABOVE the canvas. Cursor over
+            the artboard → the live map pans/zooms (normal Mapbox); cursor outside
+            the artboard → events fall through to the R3F camera (zoom + Pan tool),
+            i.e. moving/scaling the canvas box. The Draw / Polyline / Erase / Text
+            tools are DISABLED in this layer (forced to Pan); the layer is purely for
+            framing the site.
+          • LOT BOUNDARY and beyond: the map FREEZES — it is snapshotted to a PNG
+            (map preserveDrawingBuffer + toDataURL) and shown as a static <img> at
+            overlay z-index 1 BELOW the canvas. The snapshot scales/pans WITH the
+            artboard (and thus the R3F camera), so it behaves like a pinned image —
+            this resolves the earlier coordinate-lock limitation. Mapbox handlers are
+            disabled, its controls hidden, and the drawing/edit tools re-enabled so
+            the user draws on top with the normal whiteboard controls. meters-per-
+            world-unit is held at its freeze value (the page maps to a fixed geo
+            extent), so SQF stays correct under R3F zoom.
+        NOTE: R3F PNG export bg is now transparent rather than grey (alpha canvas).
+
+
+STAGE 1 — GEOGRAPHICALLY ANCHORED LOT BOUNDARY
+--------------------------------------------------------------------------------
+GOAL: a precise, real-world-scaled working area — "a canvas within the canvas."
+
+PARADOX RESOLUTION (kept from v1, CONFLICTS log #1): the boundary MUST stay bound to
+its Web Mercator projection / Mapbox alignment. FREE-FLOATING COORDINATE SCALING IS
+BANNED. We never auto-scale vertices away from the real streets.
+
+  1.1  Boundary capture: the polyline tool draws a CLOSED loop; closing it commits a
+       first-class store.boundary = { ring: [x,y][], targetSqf?: number, isLocked? }.
+       Snapping/O-TRACK (already built) keep the trace clean.
+  1.2  Live SQF readout HUD: realArea = shoelace(ring, world) × metersPerWorldUnit².
+       Live ft²/m² display. (metersPerWorldUnit already derives from the mercator
+       projection; Turf already does polygon area.)
+  1.3  Advisory Delta HUD (replaces auto-scale): user inputs a target, e.g. "Desired
+       Gross: 45,000 SQF". The HUD prints deviation, NOT a transform:
+         [ Target 45,000 | Current 38,200 | Δ -6,800 SQF (-15.1%) ]
+       The designer pulls boundary vertices manually along rights-of-way / setbacks
+       on the underlay (CAD snapping + O-TRACK) until Δ → 0. True map scale preserved.
+  1.4  Master clip: on commit, the boundary becomes the global CLIP region; all
+       downstream fields/bands/rooms are clipped to it. Build on geometry/clip.ts
+       (segmentStrokesByPolygon, pointInPolygon).
+
+EXISTS: polyline, snapping/O-TRACK, metersPerWorldUnit, Turf area, clip/pointInPolygon.
+NEW:    store.boundary entity; SQF HUD; advisory Delta HUD; boundary-as-global-clip.
+RISK:   low. Pure additive geometry + a HUD. No transform math to get wrong.
+OPEN:   single boundary vs multiple parcels; concavity/holes (Turf/clip handle simple
+        concave rings; defer holes).
+
+
+STAGE 2 — TOPOLOGICAL CIRCULATION & NETWORK UNIONING
+--------------------------------------------------------------------------------
+GOAL: a mathematically sound corridor NETWORK (not overlapping visual stripes) that
+permanently repels program.
+
+  2.1  Circulation layer + centerline capture: polyline tool in CIRCULATION mode
+       draws hallway CENTERLINES segment-by-segment; stored as
+       store.circulationPaths = [{ id, centerline:[x,y][], width }]. Centerlines snap
+       to the boundary and to each other.
+
+  2.2  TRUE EDGE-SPLITTING (resolve "snap ≠ merge") — own sub-stage, highest risk:
+       Today addStrokeToGraph only injects a shared vertex on a PROPER INTERIOR
+       crossing; an EDGE/ENDPOINT/MIDPOINT snap places a coincident-but-separate
+       vertex. Upgrade: when a new vertex lands ON an existing edge/vertex (via the
+       snap target kind), perform a topological fusion in the PSLG — split the
+       intersected edge (purge its id, mint two sub-edges) and weld a single shared
+       structural vertex. This yields a clean graph for pathfinding/unioning.
+       Micro-steps: (a) detect on-edge/on-vertex placement from the snap result;
+       (b) edge-split helper in geometry/graph.ts; (c) vertex-weld/dedup; (d) keep
+       PSLG invariants (no dangling/zero-length edges); (e) regression-test T-junctions,
+       coincident endpoints, and self-touching paths. General capability; circulation
+       is its first consumer.
+
+  2.3  Centerline → corridor BAND: offset each centerline by ±halfWidth into a closed
+       polygon ring. Reuse the per-segment normal + miter/bevel join math already in
+       buildPolylineRibbon, emitted as a polygon (round or square ends) instead of a
+       mesh. Width configurable (standard ~5–8 ft / 1.5–2.4 m).
+
+  2.4  Continuous boolean union → CirculationNetworkMask: on every commit, union all
+       corridor band polygons (Turf.js union) into one multi-polygon. Store in a
+       DEDICATED world-space field store.circulationMask (NOT store.mapGeometry, which
+       holds Mapbox-drawn GeoJSON — CONFLICTS log #7). Cache + recompute only on a
+       circulation edit. Passed to Stage 3 as the hard exclusion / keep-out zone.
+
+EXISTS: polyline, buildPolylineRibbon offset math, snapping, PSLG (addStrokeToGraph),
+        Turf.js.
+NEW:    circulationPaths entity; edge-splitting/weld in the PSLG; centerline→band
+        polygon offset; Turf-union mask in store.circulationMask.
+RISK:   2.2 is HIGH (graph surgery) → keep it isolated and test-covered. 2.3/2.4 med.
+OPEN:   width global vs per-path; how corridors meet boundary openings (entries);
+        junction cleanup.
+STATUS: IMPLEMENTED — 2.1 capture (store.circulationPaths; polyline finish in the
+        CIRCULATION layer adds an open centerline), 2.3 band offset
+        (geometry/corridor.ts centerlineToBandRing; filled translucent render via
+        the existing ribbon builder in CirculationView), 2.4 mask
+        (store.circulationMask). Width is GLOBAL (re-offsets unlocked paths). Lock is
+        a GROUP toggle over all corridors.
+        DEVIATIONS / DEFERRED:
+          • 2.4 stores the ARRAY of per-path band rings and will test point-in-ANY-
+            band for exclusion, instead of a single Turf.union multi-polygon — same
+            result for the keep-out use case, far less robustness risk. A true union
+            (clean outline + Stage-5 payload) is deferred.
+          • 2.2 PSLG edge-splitting/weld NOT YET done (HIGH risk, isolated follow-up).
+            The mask is built from centerline geometry directly, so repulsion does
+            not depend on it; it remains needed for a clean pathfinding graph.
+          • Snapping centerlines to the boundary / other corridors is NOT yet wired:
+            those entities live outside the spatial index (which holds graph strokes
+            only), so O-TRACK/snap currently engages only against committed strokes.
+            Indexing boundary + circulation vertices is a follow-up.
+
+
+STAGE 3 — DEPARTMENT ALLOCATION & NON-CONVEX FIELD DYNAMICS
+--------------------------------------------------------------------------------
+GOAL: allocate programs as BLENDING fields that deform to fit boundary − circulation
+(HARD limits) while freely overlapping / bumping into NEIGHBORING department fields
+(SOFT) — the metaball blend behavior of today's intent pins.
+
+DECISION — BLENDED, NOT PACKED (CONFLICTS log #11): departments are intentionally
+allowed to blend and overlap each other, exactly like the current intent-pin fields.
+ONLY the boundary and the circulation network are hard constraints on a department
+field; neighboring departments are NOT. Rationale: keeping the fields fluid lets the
+Stage-4 room generator place rooms more flexibly (rooms may push/bump across the soft
+seam between two departments), and the designer refines the exact seams manually (or
+via the Stage-5 LLM) once the program is settled. There is therefore NO inter-
+department exclusion, packing, or relaxation pass — that rigidity is deferred.
+
+ENTRY POINT: a dedicated "Department Zones" tool/button (first-pass note) extends the
+existing IntentPin UX (place → name → strength/radius → target SQF).
+
+  3.1  Department entity + tool: store.departments = [{ id, name, center, targetSqf,
+       color, isLocked }]. Reuse IntentPin placement UX + MetaballOverlay rendering.
+       Each department is its OWN field channel (its own contour + area readout) — the
+       exact mechanic as today's per-IntentType isolation — but the channels BLEND
+       visually and may overlap in space (no mutual exclusion). The shared hard mask
+       (3.2) applies identically to every channel, so all of them stop at the boundary
+       and at corridors but pass freely through one another.
+  3.2  HARD MASK (binary gate): build a derived BOUNDARY∩(NOT circulationMask) domain.
+       Render it once per topology change into an offscreen MASK TEXTURE; the metaball
+       shader samples the mask and zeroes potential outside it. (IMPROVEMENT,
+       CONFLICTS log #6: replaces v1's per-fragment ray-vs-polygon loop, which is
+       expensive and awkward to feed arbitrary corridor segments into per fragment.)
+       Wyvill falloff stays potential = (1 - d²/r²)³  [r², not r³ — CONFLICTS log #3].
+  3.3  SOFT KEEP-OUT MARGIN: from the mask, compute a signed-distance falloff (a
+       jump-flood SDF texture, or a CPU distance field at coarse grid) so the field
+       eases toward 0 approaching a corridor — contours bend AROUND corridors smoothly
+       instead of being hard-cut. (Reuses the interior-distance-field idea from
+       lockInfluenceAt, here as an EXTERIOR keep-out.)
+  3.4  (ADVANCED, optional) TOPOLOGICAL LEAK MITIGATION: stop a pin influencing pixels
+       across a thin wall that are within Euclidean radius but topologically cut off.
+       Approximate geodesic distance within the masked domain (constrained jump-flood
+       from pins, or line-of-sight test against circulationMask). Ship 3.2/3.3 first;
+       3.4 is a refinement, not a blocker. (This is v1's "leak mitigation" goal, re-
+       staged as advanced so the stage can succeed without it.)
+  3.5  Area diagnostics + targeting + lock: per-department SQF readout (area of its
+       masked contour) in the right panel; solve the field level-set so enclosed area
+       ≈ targetSqf (per-region analogue of the boundary advisory loop, bounded by
+       available masked area); area-lock a department once its budget is met.
+
+EXISTS: IntentPin UX, metaballField.ts (Wyvill), MetaballOverlay GPU shader (already
+        texture-streams pins), marchingSquares.ts contours, getRegionConcentration,
+        lockInfluenceAt distance-field pattern.
+NEW:    departments entity; mask + SDF textures feeding the shader/contour; per-dept
+        area targeting; (advanced) geodesic leak mitigation.
+RISK:   3.2 med, 3.3 med, 3.4 HIGH (defer/optional), 3.5 med.
+OPEN:   SQF over-allocation (proportional shrink vs flag); fate of the 4 generic intent
+        types (Density/Pedestrian/SQF/Landuse) — keep as per-department intent
+        metadata rather than standalone pins.  [DECIDED: fields blend, not packed.]
+
+
+STAGE 4 — INTERNAL ROOM SUBDIVISION
+--------------------------------------------------------------------------------
+GOAL: subdivide a (locked) department polygon into rooms. HYBRID model resolving the
+two source visions (CONFLICTS log #2): PARAMETRIC packing is primary; manual editing
+and partition lines refine it; both emit the SAME room nodes.
+
+  4.1  Room data model: store.rooms nodes
+       { roomId, parentDeptId, polygon:[x,y][], areaSqf, locked, rotation? }.
+       A room is always a valid sub-polygon of its parent department.
+  4.2  PARAMETRIC PACK (primary): in a department, the user types a ROOM COUNT N. The
+       engine generates N best-fit rectangles packed tight (shared/adjacent edges)
+       into the department polygon, each inheriting targetSqf / N (equal split). The
+       count is RE-TYPEABLE: change 7→5 and rooms regenerate to 5 evenly-divided
+       rooms — the headline "smart" behavior. (Start with axis-aligned bin/strip
+       packing of the dept's bounding region clipped to the polygon; refine fit later.)
+  4.3  MANUAL REFINEMENT: generated rooms can be moved, rotated, resized, and snapped
+       (CAD snapping + O-TRACK + parallel-wall tracking + standard interior offsets
+       e.g. 5 ft / 8 ft + right-angle lock). Edits update areaSqf live.
+  4.4  (optional) MANUAL PARTITION LINES: draw an internal line to split a parent
+       polygon into two sub-polygons (v1's original room method) — produces the same
+       room nodes as 4.2, for irregular/non-rectangular rooms.
+  4.5  Constraint inheritance: rooms inherit ALL upstream constraints (inside boundary,
+       off circulation, within parent department). Re-deriving on a parent change must
+       re-pack/clip rooms.
+
+EXISTS: snapping/O-TRACK, parallel/perp/right-angle snap tiers, polygon clip.
+NEW:    rooms entity; N-rectangle best-fit packer; room transform/resize handles;
+        partition-line split.
+RISK:   4.2 packer is med–HIGH (good-looking tight packing of equal rects in an
+        arbitrary polygon is non-trivial) → ship axis-aligned strip packing first,
+        iterate. 4.3/4.4 med.
+OPEN:   packing aesthetics for non-convex departments; door/access openings onto
+        circulation (likely a later feature).
+
+
+STAGE 5 — LLM CO-RESOLUTION GENERATION (FINAL)
+--------------------------------------------------------------------------------
+GOAL: the Vercel Edge Function (api/generate.ts) as the ABSOLUTE FINAL synthesis
+step — a precision CO-RESOLVER over a dense pre-arranged constraint field, never a
+blank-canvas guesser.
+
+  5.1  Multi-stage serializer: extend intentSerialization.ts to compile the full
+       constraint payload:
+         parcelBoundary       — full coordinate ring of the site frame
+         circulationNetwork   — PSLG nodes/edges + unified circulationMask
+         lockedAreas          — multi-polygons flagged isLocked (from Foundation A)
+         flexibleDepartments  — loose dept boundaries + their pins + target-area deltas
+         roomPartitions       — room sub-polygon nodes from Stage 4
+  5.2  Edge function call: POST the payload to api/generate.ts; the model identifies
+       remaining openings / under-allocated department slots and returns clean JSON
+       coordinate arrays.
+  5.3  Reintegration + iterate: merge the returned vectors into the live PSLG; the
+       designer can accept, enter Vector Edit, tweak vertices, lock adjustments on the
+       right panel, and re-fire — multi-pass iterative refinement, fully non-destructive.
+
+EXISTS: intentSerialization.ts (per-vertex/region intent mix), planned api/generate.ts,
+        Vector Edit, PSLG, Foundation A locks.
+NEW:    constraint-payload serializer; edge function; response→PSLG reintegration loop.
+RISK:   med. Serialization is mechanical; the loop UX needs care so re-fires don't
+        clobber locked work (Foundation A guards prevent that).
+
+
+PROPOSED STORE SHAPE (consolidated, names provisional)
+--------------------------------------------------------------------------------
+  context:          'MAP' | 'BLANK'
+  stage:            'CONTEXT'|'BOUNDARY'|'CIRCULATION'|'DEPARTMENTS'|'ROOMS'|'GENERATE'
+  boundary:         { ring:[x,y][]; targetSqf?:number; isLocked?:boolean } | null
+  circulationPaths: [{ id; centerline:[x,y][]; width:number; isLocked?:boolean }]
+       → derived    circulationMask: MultiPolygon (Turf union; cached)
+  departments:      [{ id; name; center; targetSqf; color; isLocked?:boolean }]
+       → derived    per-department contour polygons (own field channel, masked by
+                    boundary∩¬circulation; channels BLEND and may overlap each other)
+  rooms:            [{ roomId; parentDeptId; polygon:[x,y][]; areaSqf; locked; rotation? }]
+  Each layer's features expose isLocked to Foundation A.
+
+
+CONFLICTS RESOLVED & IMPROVEMENTS SUBSTITUTED (cross-ref vs restructure.txt)
+--------------------------------------------------------------------------------
+ 1. SCALE-TO-TARGET: first-pass auto-scaled the ring (user: "not sure"); v1 bans
+    free-floating scaling. RESOLVED → advisory Delta HUD + manual vertex pulling
+    (Stage 1.3); map alignment preserved. Added Stage 0 CONTEXT (was implied by the
+    first-pass "context layer" note, absent in v1).
+ 2. ROOMS: first-pass = auto N equal rectangles, re-typeable count; v1 = manual
+    partition lines. RESOLVED → HYBRID (Stage 4): parametric pack primary (4.2), manual
+    edit (4.3) + partition lines (4.4) secondary; one shared room-node model (4.1).
+ 3. WYVILL TYPO: v1 wrote (1 - d²/r³)³. FIXED → (1 - d²/r²)³ (matches metaballField.ts).
+ 4. MAP UI: merged first-pass notes — map confined to canvas bounds (0.2), freeze +
+    hide controls after boundary (0.3).
+ 5. DEPARTMENT ENTRY: named the "Department Zones" tool/button (first-pass note) in 3.1.
+ 6. FIELD LEAK (IMPROVEMENT): replaced v1's per-fragment ray-vs-polygon intersection
+    with a precomputed mask/SDF TEXTURE the shader samples (3.2/3.3); true geodesic/
+    line-of-sight leak mitigation re-staged as advanced/optional (3.4).
+ 7. CIRCULATION STORAGE (IMPROVEMENT): store in dedicated store.circulationMask, not
+    store.mapGeometry (which holds Mapbox-drawn GeoJSON).
+ 8. AREA LOCK: clarified feature-level isLocked vs existing spatial LockPolygon — they
+    coexist (Foundation A).
+ 9. LAYER SYSTEM: merged the first-pass "stacked, revisitable, metadata-carrying layer"
+    note into Foundation A as the Layer Navigator (not Photoshop layers).
+10. SUB-STAGING: every stage decomposed into ordered sub-stages with EXISTS/NEW/RISK,
+    isolating the high-risk pieces (2.2 graph surgery, 3.4 geodesic, 4.2 packer) so the
+    rest of each stage can ship without them.
+11. DEPARTMENT BLENDING (DECIDED): departments blend/overlap like intent pins; only
+    boundary + circulation are hard. No inter-department packing/exclusion — keeps
+    fields fluid for flexible Stage-4 room generation; seams refined manually/by LLM.
+
+
+OPEN QUESTIONS TO RESOLVE NEXT
+--------------------------------------------------------------------------------
+  - Single boundary vs multiple parcels; concavity / holes.
+  - Hallway width: global vs per-path; corridor↔boundary entries; junction cleanup.
+  - Departments: SQF over-allocation handling; fate of the 4 generic intent types
+    (→ per-department metadata?).  [blended-vs-packed DECIDED → blended.]
+  - Rooms: packing aesthetics in non-convex departments; door/access openings.
+  - SQF reporting: gross (whole lot) vs net (minus circulation) — likely show both.
+  - Units: ft² vs m² toggle default.
+================================================================================

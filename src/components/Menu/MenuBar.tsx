@@ -24,7 +24,7 @@ export function MenuBar() {
 
   return (
     <header className="menu-bar" onPointerDown={(e) => e.stopPropagation()}>
-      <span className="menu-bar-brand">METABALL SKETCH</span>
+      <span className="menu-bar-brand">Bloom</span>
 
       <nav className="menu-bar-menus">
         {MENUS.map(({ label, items }) => (

@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import type {
+  Boundary,
+  CirculationPath,
   Graph,
   IntentPin,
   IntentType,
@@ -15,6 +17,7 @@ import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
 import { segmentStrokesByPolygon } from '../geometry/clip'
 import { simplifyRDP } from '../geometry/simplify'
 import { buildSnapIndex, type SpatialGrid } from '../geometry/spatialIndex'
+import { buildCirculationMask } from '../geometry/corridor'
 
 /**
  * Central canvas + tool state (Cluster D).
@@ -37,6 +40,37 @@ export type ToolMode =
   | 'TEXT'
 export type Stage = 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
 export type ToolbarPosition = 'top' | 'right' | 'bottom' | 'left'
+
+/**
+ * Bloom restructure (restructure_v1.txt) — the guided constraint-accumulating
+ * pipeline. The active layer is surfaced by the right-panel Layer Navigator
+ * (Foundation A) and gates the workflow top-down while staying revisitable.
+ * Introduced alongside (not replacing) the legacy `stage` so existing UI keeps
+ * working during the transition.
+ */
+export type PipelineLayer =
+  | 'CONTEXT'
+  | 'BOUNDARY'
+  | 'CIRCULATION'
+  | 'DEPARTMENTS'
+  | 'ROOMS'
+  | 'GENERATE'
+
+/** Drawing substrate chosen in Stage 0 (Context): real map vs blank artboard. */
+export type CanvasContext = 'MAP' | 'BLANK'
+
+/** Background grid lattice for the blank-sheet substrate ('none' = no grid). */
+export type GridType = 'none' | 'square' | 'triangle' | 'dots'
+
+/** Pipeline layer order (index drives the sequential unlock in the Layer panel). */
+export const LAYER_ORDER: PipelineLayer[] = [
+  'CONTEXT',
+  'BOUNDARY',
+  'CIRCULATION',
+  'DEPARTMENTS',
+  'ROOMS',
+  'GENERATE',
+]
 
 /** Default artboard size in world units (3:2 landscape, ARCH-D-like). */
 export const DEFAULT_PAGE_WIDTH = 1080
@@ -88,6 +122,7 @@ const SELECTION_TOOLS = new Set<ToolMode>(['SELECT', 'LASSO'])
 let lockCounter = 0
 let pinCounter = 0
 let textCounter = 0
+let circulationCounter = 0
 
 const HISTORY_LIMIT = 100
 
@@ -162,20 +197,79 @@ interface DrawingState {
   /** Live real-world scale: meters per world unit (1 world unit = 1px @ zoom 1).
    *  Null until calibrated (currently derived from the active Mapbox projection). */
   metersPerWorldUnit: number | null
-  /** Whether the Mapbox map overlay is shown over the canvas. */
+  /** Whether the Mapbox map overlay is shown (as a dim underlay beneath drawing). */
   mapActive: boolean
+  /** Map underlay dim amount 0..1 (0 = full map, 1 = faded to white). */
+  mapDim: number
   /** Finalized GeoJSON drawn on the map, for the main app to reference/store. */
   mapGeometry: GeoJSON.FeatureCollection | null
   /** Active CAD snap guide emitted by the polyline snapping pipeline (Step 1). */
   activeSnapGuide: SnapGuide | null
+  /** Active pipeline layer (Bloom restructure — right-panel Layer Navigator). */
+  activeLayer: PipelineLayer
+  /** Highest layer index the user has reached; gates the sequential unlock (they
+   *  can revisit any reached layer and step forward one at a time). */
+  maxLayerReached: number
+  /** Drawing substrate chosen in the Context layer; null until the user picks. */
+  context: CanvasContext | null
+  /** Blank-sheet background grid lattice + spacing (world units). */
+  gridType: GridType
+  gridSpacing: number
+  /** Lot boundary (Stage 1) — the master working area; null until traced. */
+  boundary: Boundary | null
+  /** Circulation centerlines (Stage 2). */
+  circulationPaths: CirculationPath[]
+  /** Global corridor width (world units) applied to new/unlocked paths. */
+  circulationWidth: number
+  /** Derived keep-out mask: one band ring per path (point-in-any-band). Null when
+   *  there are no corridors. Recomputed whenever the circulation set changes. */
+  circulationMask: { x: number; y: number }[][] | null
+  /** Master object-snapping switch (Cluster 4). When false, the Polyline and
+   *  Vector-Edit snap pipelines short-circuit to raw pointer input. Default on. */
+  snappingEnabled: boolean
+  /** Object-snap tracking (O-TRACK) anchors acquired by the Polyline tool by
+   *  hovering a vertex/midpoint. Capped at 2; alignment rays project from these.
+   *  Transient — cleared on path completion, cancel, or leaving the polyline tool. */
+  trackedPoints: Array<{ id: string; coords: [number, number] }>;
   /** Undo/redo stacks: snapshots of graph + locks + pins before each action. */
   past: HistoryEntry[]
   future: HistoryEntry[]
 
   /** Write the active snap guide (or clear it by passing null). Called each pointer-move frame by the polyline snapping pipeline. */
   setSnapGuide: (guide: SnapGuide | null) => void
+  /** Flip the master snapping switch. Clears any live guide when turning off so
+   *  on-canvas cues vanish instantly. */
+  toggleSnapping: () => void
+  /** Acquire an O-TRACK anchor (no-op if already tracked); caps at 2, dropping
+   *  the oldest. */
+  addTrackedPoint: (id: string, coords: [number, number]) => void
+  /** Drop all O-TRACK anchors. */
+  clearTrackedPoints: () => void
   setTool: (tool: ToolMode) => void
   setStage: (stage: Stage) => void
+  /** Switch the active pipeline layer (right-panel navigator). */
+  setActiveLayer: (layer: PipelineLayer) => void
+  /** Choose the Context substrate; MAP turns the Mapbox overlay on, BLANK off. */
+  setContext: (ctx: CanvasContext) => void
+  /** Blank-sheet grid lattice + spacing controls. */
+  setGridType: (type: GridType) => void
+  setGridSpacing: (spacing: number) => void
+  /** Commit/replace the lot boundary from a traced ring (no-op if locked). */
+  setBoundary: (ring: { x: number; y: number }[]) => void
+  /** Remove the lot boundary (no-op if locked). */
+  clearBoundary: () => void
+  /** Set the advisory target area (drives the delta readout); undefined clears it. */
+  setBoundaryTargetSqf: (sqf: number | undefined) => void
+  /** Freeze/unfreeze the boundary as an immutable anchor (Foundation A). */
+  setBoundaryLocked: (locked: boolean) => void
+  /** Add a circulation centerline (uses the current global width); rebuilds mask. */
+  addCirculationPath: (centerline: { x: number; y: number }[]) => void
+  /** Remove all UNLOCKED circulation paths; rebuilds mask. */
+  clearCirculation: () => void
+  /** Set the global corridor width; re-offsets unlocked paths + rebuilds mask. */
+  setCirculationWidth: (width: number) => void
+  /** Lock/unlock all circulation paths (Foundation A group lock). */
+  setCirculationLocked: (locked: boolean) => void
   setColor: (color: string) => void
   setBaseWidth: (width: number) => void
   setLineStyle: (style: LineStyle) => void
@@ -216,6 +310,8 @@ interface DrawingState {
   setGeoScale: (metersPerWorldUnit: number | null) => void
   setMapActive: (active: boolean) => void
   toggleMap: () => void
+  /** Set the map underlay dim amount (0..1). */
+  setMapDim: (dim: number) => void
   setMapGeometry: (geometry: GeoJSON.FeatureCollection | null) => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
@@ -236,7 +332,9 @@ interface DrawingState {
 }
 
 export const useDrawingStore = create<DrawingState>((set, get) => ({
-  toolMode: 'DRAW',
+  // Starts in the Context layer (map setup), where creation tools are disabled, so
+  // the initial tool is Pan rather than Draw.
+  toolMode: 'PAN',
   stage: 'SKETCH',
   strokeColor: '#1a1a1a',
   baseWidth: 2,
@@ -257,12 +355,37 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   underlay: null,
   metersPerWorldUnit: null,
   mapActive: false,
+  mapDim: 0.35,
   mapGeometry: null,
   activeSnapGuide: null,
+  activeLayer: 'CONTEXT',
+  maxLayerReached: 0,
+  context: null,
+  gridType: 'none',
+  gridSpacing: 32,
+  boundary: null,
+  circulationPaths: [],
+  circulationWidth: 12,
+  circulationMask: null,
+  snappingEnabled: true,
+  trackedPoints: [],
   past: [],
   future: [],
 
   setSnapGuide: (guide) => set({ activeSnapGuide: guide }),
+  toggleSnapping: () =>
+    set((state) => ({
+      snappingEnabled: !state.snappingEnabled,
+      // Turning snapping OFF should wipe any guide still on screen.
+      activeSnapGuide: state.snappingEnabled ? null : state.activeSnapGuide,
+    })),
+  addTrackedPoint: (id, coords) =>
+    set((state) => {
+      if (state.trackedPoints.some((p) => p.id === id)) return {}
+      return { trackedPoints: [...state.trackedPoints, { id, coords }].slice(-2) }
+    }),
+  clearTrackedPoints: () =>
+    set((state) => (state.trackedPoints.length ? { trackedPoints: [] } : {})),
   setTool: (tool) =>
     set((state) => ({
       toolMode: tool,
@@ -271,10 +394,69 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       // Abandon any in-progress pin/text placement when leaving those tools.
       pendingPin: tool === 'INTENT_PIN' ? state.pendingPin : null,
       pendingText: tool === 'TEXT' ? state.pendingText : null,
-      // Clear any active snap guide when leaving the polyline tool.
+      // Clear any active snap guide + O-TRACK anchors when leaving the polyline tool.
       activeSnapGuide: tool === 'POLYLINE' ? state.activeSnapGuide : null,
+      trackedPoints: tool === 'POLYLINE' ? state.trackedPoints : [],
     })),
   setStage: (stage) => set({ stage }),
+  setActiveLayer: (layer) =>
+    set((state) => ({
+      activeLayer: layer,
+      maxLayerReached: Math.max(state.maxLayerReached, LAYER_ORDER.indexOf(layer)),
+    })),
+  setContext: (ctx) => set({ context: ctx, mapActive: ctx === 'MAP' }),
+  setGridType: (type) => set({ gridType: type }),
+  setGridSpacing: (spacing) => set({ gridSpacing: Math.max(1, Math.round(spacing) || 1) }),
+  setBoundary: (ring) =>
+    set((state) => {
+      if (state.boundary?.isLocked) return {} // locked boundary is immutable
+      // Normalize: drop a trailing point that repeats the first (closed ring).
+      const r = ring.slice()
+      if (r.length > 1) {
+        const a = r[0]
+        const b = r[r.length - 1]
+        if (Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6) r.pop()
+      }
+      if (r.length < 3) return {}
+      return { boundary: { ...state.boundary, ring: r } }
+    }),
+  clearBoundary: () =>
+    set((state) => (state.boundary?.isLocked ? {} : { boundary: null })),
+  setBoundaryTargetSqf: (sqf) =>
+    set((state) => (state.boundary ? { boundary: { ...state.boundary, targetSqf: sqf } } : {})),
+  setBoundaryLocked: (locked) =>
+    set((state) => (state.boundary ? { boundary: { ...state.boundary, isLocked: locked } } : {})),
+  addCirculationPath: (centerline) =>
+    set((state) => {
+      if (centerline.length < 2) return {}
+      const path: CirculationPath = {
+        id: `circ-${Date.now()}-${circulationCounter++}`,
+        centerline: centerline.map((p) => ({ x: p.x, y: p.y })),
+        width: state.circulationWidth,
+      }
+      const circulationPaths = [...state.circulationPaths, path]
+      return { circulationPaths, circulationMask: buildCirculationMask(circulationPaths) }
+    }),
+  clearCirculation: () =>
+    set((state) => {
+      const remaining = state.circulationPaths.filter((p) => p.isLocked)
+      return {
+        circulationPaths: remaining,
+        circulationMask: remaining.length ? buildCirculationMask(remaining) : null,
+      }
+    }),
+  setCirculationWidth: (width) =>
+    set((state) => {
+      const w = Math.max(1, width)
+      const circulationPaths = state.circulationPaths.map((p) => (p.isLocked ? p : { ...p, width: w }))
+      return {
+        circulationWidth: w,
+        circulationPaths,
+        circulationMask: circulationPaths.length ? buildCirculationMask(circulationPaths) : null,
+      }
+    }),
+  setCirculationLocked: (locked) =>
+    set((state) => ({ circulationPaths: state.circulationPaths.map((p) => ({ ...p, isLocked: locked })) })),
   setColor: (color) => set({ strokeColor: color }),
   setBaseWidth: (width) => set({ baseWidth: width }),
   setLineStyle: (style) => set({ lineStyle: style }),
@@ -434,6 +616,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   setGeoScale: (metersPerWorldUnit) => set({ metersPerWorldUnit }),
   setMapActive: (active) => set({ mapActive: active }),
   toggleMap: () => set((state) => ({ mapActive: !state.mapActive })),
+  setMapDim: (dim) => set({ mapDim: Math.max(0, Math.min(1, dim)) }),
   setMapGeometry: (geometry) => set({ mapGeometry: geometry }),
   setVertexPositions: (updates) =>
     set((state) => {

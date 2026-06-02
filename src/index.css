@@ -49,13 +49,32 @@ body {
   background: var(--bg);
 }
 
-/* The canvas workspace fills all space below the menu bar; the floating toolbar
-   and overlays anchor to it. */
-.canvas-area {
-  position: relative;
+/* Workspace row beneath the ribbon: the canvas on the left, the layer panel on
+   the right. Fills all remaining vertical space. */
+.workspace {
+  display: flex;
+  flex-direction: row;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+}
+
+/* The canvas workspace fills the space left of the layer panel; the floating
+   toolbar and overlays anchor to it. overflow:hidden clips the artboard-confined
+   map overlay when the page sheet extends past the visible canvas. */
+.canvas-area {
+  position: relative;
+  /* Own stacking context so the in-Context map overlay (z-index 3, above the
+     drawing canvas) stays contained within the canvas and can't paint over the
+     right panel; overflow:hidden clips it to the canvas box. */
+  z-index: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Grey workspace, now provided by HTML (the R3F canvas above is transparent so
+     the Mapbox underlay can show through). */
+  background: var(--bg);
 }
 
 /* ---- Top menu bar ---- */
@@ -73,10 +92,18 @@ body {
 }
 
 .menu-bar-brand {
-  font-size: 11px;
+  font-family: 'Dancing Script', 'Segoe Script', cursive;
+  font-size: 24px;
   font-weight: 700;
-  letter-spacing: 0.16em;
-  color: var(--text-dim);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  /* A soft bloom-pink gradient wordmark. */
+  background: linear-gradient(95deg, #f472b6 0%, #c084fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: #f472b6; /* fallback if background-clip:text is unsupported */
+  padding-bottom: 2px;
 }
 
 .menu-bar-menus {
@@ -141,6 +168,8 @@ body {
 .canvas-layer {
   position: absolute;
   inset: 0;
+  /* Above the Mapbox underlay (.map-overlay z 1) so drawing renders on top. */
+  z-index: 2;
 }
 
 /* The R3F canvas should fill its layer and not capture text selection. */

@@ -1,76 +1,17 @@
 ================================================================================
-METABALL SKETCH — LLM IMPLEMENTATION & SPECIFICATION PLAN
+BLOOM — LLM IMPLEMENTATION & SPECIFICATION PLAN
 Purpose: Task-grouped context file optimized for automated coding agents.
 Objective: Address core technical gaps, precision mechanics, and UX alignment.
 ================================================================================
 
-CLUSTER 1: UI STREAMLINING & VISUAL UX ALIGNMENT [LOW COMPLEXITY] *done
+CLUSTER 1: UI STREAMLINING & VISUAL UX ALIGNMENT [LOW COMPLEXITY] *DONE !!!
 ----------------------------------------------------------------------
-Goal: Fix the visual disconnect between back-end math and front-end feedback,
-and minimize UI friction.
 
-TASK 1.1: REFACTOR LOCK FIELD VISUALIZATION
-- Context: `LockPolygon` computes a smooth distance field falloff via `lockInfluenceAt()`
-  (1.0 inside -> 0.0 at `featherRadius`), but renders as a flat grey box.
-- To-Do: Update the Three.js/R3F rendering layer for `LockPolygon`. Instead of a flat,
-  uniform color fill, implement a custom shader or a canvas-generated procedural texture.
-- Requirement: Visually display the gradient falloff from the inner boundary outward
-  to the edge of the `featherRadius` to explicitly reflect the AI's zone of influence.
-
-TASK 1.2: STREAMLINE THE RIBBON UI PARADOX
-- Context: The current multi-row Revit/Word style Ribbon toolbar is click-heavy.
-- To-Do: Consolidate the toolbar footprint into a persistent, minimalist tool rail 
-  (e.g., vertical or horizontal layout) with floating contextual property panels.
-- Requirement: Keep the system non-modal but group current tab behaviors (Import, 
-  Sketch, Normalize, Pin) into quick-access iconic groupings to maximize the canvas 
-  viewport real estate.
-
-
-CLUSTER 2: CANVAS CALIBRATION & GEOSPATIAL EDGE CASES [MEDIUM COMPLEXITY] *done
+CLUSTER 2: CANVAS CALIBRATION & GEOSPATIAL EDGE CASES [MEDIUM COMPLEXITY] * DONE !!!
 ----------------------------------------------------------------------
-Goal: Ensure coordinate scaling holds up across multiple documents and geospatial boundaries.
 
-TASK 2.1: MULTI-ASSET SCALE FACTOR MANAGEMENT
-- Context: The artboard currently forces a total canvas resize based on a single 
-  imported image/PDF dimensions, which breaks multi-asset scaling contexts.
-- To-Do: Decouple the absolute canvas sheet sizing from individual assets. Move to an
-  independent world grid sheet coordinate bounding frame.
-- Requirement: Introduce explicit scale mappings (e.g., `pixelsPerMeter` or a localized
-  `worldToRealScale` state matrix) in the Zustand store. Ensure that importing a new
-  PDF or image calibrates its *underlay mesh transform scale* instead of resizing the 
-  global coordinate boundaries.
-
-TASK 2.2: DYNAMIC MAPBOX SCALE CALIBRATION
-- Context: 1 world unit = 1 pixel at zoom 1. Turf.js calculates real-world lengths/areas.
-- To-Do: Build an explicit spatial scaling hook that dynamically computes scale factors.
-- Requirement: Listen to Mapbox zoom and center changes (`draw.render` or map move events),
-  and dynamically calculate the actual meters-per-world-unit conversion factor based on 
-  the active Mercator projection latitude. Update the Turf.js HUD pipeline to use this
-  live scale factor.
-
-
-CLUSTER 3: PRECISION CANVASES & SPATIAL SNAPPING ENGINE [HIGH COMPLEXITY]
+CLUSTER 3: PRECISION CANVASES & SPATIAL SNAPPING ENGINE [HIGH COMPLEXITY] **DONE !!!
 ----------------------------------------------------------------------
-Goal: Introduce cad-like precision to human sketching to ensure clean PSLG graphs.
-
-TASK 3.1: IMPLEMENT A ZUSTAND SPATIAL INDEX (QUADTREE / HASH GRID)
-- Context: There is currently no spatial acceleration structure for the PSLG vector graph.
-- To-Do: Integrate a light, fast 2D spatial index library (e.g., `rbush` or a lightweight
-  custom spatial hash grid) directly into or alongside the Zustand graph store.
-- Requirement: Automatically index all `Vertex` coordinate objects on drawing actions
-  (`draw.create`, `draw.update`, stroke creation, and vertex modifications).
-
-TASK 3.2: CORE VECTOR SNAPPING ENGINE
-- Context: The drawing tools lack endpoint, midpoint, and intersection tracking. ***might make the most 
-sense to implement the vector snapping engine to just the polyine tool for now. 
-- To-Do: Build an ambient snapping listener into the drawing workflow (`InteractionPlane` 
-  pointer move tracking).
-- Requirement: When drawing with Polylines or editing with the Vector Edit tool, query 
-  the spatial index using the cursor's world space coordinates. If a vertex, line segment 
-  midpoint, or edge intersection falls within a configurable pixel threshold (e.g., 8px), 
-  snap the interaction coordinates exactly to that target and render a small geometric 
-  visual indicator (square for endpoint, triangle for midpoint).
-
 
 CLUSTER 4: REFACTORING PHASE 2 GENERATIVE LLM PIPELINE [DEEP ARCHITECTURAL SHIFT] *hold off on this logic until specified!!!!
 ----------------------------------------------------------------------
@@ -95,3 +36,33 @@ TASK 4.2: PARAMETRIC & PROCEDURAL GENERATION ENGINE
   combines it with the local `lockInfluenceAt()` matrix fields, and programmatically writes 
   mathematically perfect vector lines and vertices directly back into the PSLG graph.
 ================================================================================
+
+maybe relevant information: from a previous .txt file:
+— LLM GENERATE (next)
+
+The serialization infrastructure is already built. What remains:
+
+  1. api/generate.ts — Vercel Edge Function proxying Anthropic API (server-side
+     key). Receives: PSLG graph + lockInfluence field + intentMix spatial matrix.
+
+  2. System prompt — encodes:
+       LOCKED (influence 1.0)   = fixed anchors, do not move
+       TRANSITION (0 < inf < 1) = feather zone, bend/attach here
+       OPEN (influence 0)       = free to generate
+       intentMix per vertex/region = programmatic intent (density, pedestrian, etc.)
+
+  3. Parametric return format — Claude returns structured parameters / layout
+     rules, NOT raw coordinates. A local TypeScript layout engine interprets
+     these rules and writes mathematically precise vertices back into the PSLG
+     (avoids token-limit blowout and coordinate hallucination).
+
+  4. Reviewable layer — vector diff displayed before committing:
+       Accept → merges into graph + snapshot
+       Reject → discards; graph unchanged
+
+  5. Generate tab activation — swap the ribbon placeholder for the live UI.
+
+NOTE: The serializer (io/intentSerialization.ts) already produces the correct
+intentMix payload. lockInfluenceAt() already partitions vertices by zone.
+metersPerWorldUnit already provides real-world scale context. Phase 2 is
+primarily the Edge Function + prompt engineering + the layout interpreter.

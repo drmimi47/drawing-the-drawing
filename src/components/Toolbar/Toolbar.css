@@ -69,6 +69,35 @@
   box-shadow: none;
 }
 
+/* Master snapping toggle: vibrant accent when on, grayed with a diagonal slash
+   when off (mirrors the AutoCAD/Revit OSNAP indicator convention). */
+.snap-toggle {
+  position: relative;
+}
+
+.snap-toggle.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.snap-toggle--off {
+  color: var(--text-dim);
+}
+
+.snap-toggle--off::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  top: 50%;
+  height: 2px;
+  background: currentColor;
+  border-radius: 1px;
+  transform: rotate(-45deg);
+  transform-origin: center;
+  pointer-events: none;
+}
+
 .toolbar-divider {
   width: 1px;
   align-self: stretch;

@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { useDrawingStore } from '../../store/drawingStore'
@@ -20,6 +20,9 @@ import { IntentFieldView } from './IntentFieldView'
 import { TextLayer } from './TextLayer'
 import { SnapIndicator } from './SnapIndicator'
 import { SnapGuideOverlay } from './SnapGuideOverlay'
+import { TrackingOverlay } from './TrackingOverlay'
+import { BoundaryView } from './BoundaryView'
+import { CirculationView } from './CirculationView'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
@@ -49,11 +52,22 @@ function RibbonMesh({
     [points, straight, lineStyle, width],
   )
 
+  // The BufferGeometry instance is reused as `geometry` data updates (live draw /
+  // polyline preview / vertex drag). Three.js caches the bounding sphere on first
+  // cull and never refreshes it, so a moving preview keeps a stale sphere and gets
+  // wrongly frustum-culled when zoomed in (small frustum). Recompute it on every
+  // geometry change so culling stays correct without disabling it scene-wide.
+  const geoRef = useRef<THREE.BufferGeometry>(null)
+  useLayoutEffect(() => {
+    const g = geoRef.current
+    if (g && geometry.positions) g.computeBoundingSphere()
+  }, [geometry])
+
   if (!geometry.positions || !geometry.indices) return null
 
   return (
     <mesh raycast={() => null} renderOrder={1}>
-      <bufferGeometry>
+      <bufferGeometry ref={geoRef}>
         <bufferAttribute attach="attributes-position" args={[geometry.positions, 3]} />
         <bufferAttribute attach="index" args={[geometry.indices, 1]} />
       </bufferGeometry>
@@ -217,6 +231,9 @@ export function DrawingLayer() {
       <LockFieldView locks={lockPolygons} />
       <IntentFieldView pins={intentPins} pending={pendingPin} />
       <TextLayer />
+      {/* Circulation corridor bands (Stage 2) + lot boundary frame (Stage 1). */}
+      <CirculationView />
+      <BoundaryView />
       {graph.strokes.map((stroke) => (
         <StrokeView key={stroke.id} graph={graph} stroke={stroke} selected={selectedSet.has(stroke.id)} />
       ))}
@@ -235,6 +252,7 @@ export function DrawingLayer() {
       {toolMode === 'VECTOR' && <VectorHandles graph={graph} />}
       {snapTarget && <SnapIndicator snap={snapTarget} />}
       {toolMode === 'POLYLINE' && <SnapGuideOverlay guide={activeSnapGuide} />}
+      {toolMode === 'POLYLINE' && <TrackingOverlay />}
     </>
   )
 }

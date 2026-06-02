@@ -1,16 +1,43 @@
-/* Map overlay: fills the canvas container exactly and sits above the R3F canvas
-   (z 0) but below the app chrome (menu bar z 20, ribbon z 15). Because it lives
-   inside .canvas-area (position: relative), inset:0 binds it to the canvas
-   bounds rather than the whole viewport. */
+/* Map overlay: positioned to the page-sheet (artboard) rectangle via an inline
+   left/top/width/height computed each frame from the live viewport, so the map is
+   confined to the white sheet rather than the whole grey canvas. Sits above the
+   R3F canvas (z 0) but below the app chrome. (.canvas-area clips any overflow when
+   the artboard extends past the visible canvas.) */
+/* z-index is set inline per layer (3 above the canvas while framing in Context, 1
+   below it once frozen so drawing renders on top). */
 .map-overlay {
   position: absolute;
-  inset: 0;
-  z-index: 8;
 }
 
 .map-container {
   position: absolute;
   inset: 0;
+}
+
+/* Frozen map snapshot: fills the artboard rect and scales with it (pinned PNG). */
+.map-frozen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Adjustable white dimmer over the map (opacity set inline from store.mapDim).
+   Non-interactive so map controls / drawing still receive events. */
+.map-dim {
+  position: absolute;
+  inset: 0;
+  background: #ffffff;
+  pointer-events: none;
+}
+
+/* Frozen map (any layer past Context) = static tracing backdrop: hide its
+   interactive controls. */
+.map-overlay.is-frozen .mapboxgl-ctrl {
+  display: none;
 }
 
 /* Mapbox controls inherit the app's sharp, dark aesthetic. */

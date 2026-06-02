@@ -8,6 +8,8 @@ const MapView = lazy(() => import('./components/Map/MapView').then((m) => ({ def
 import { NormalizeMenu } from './components/Toolbar/NormalizeMenu'
 import { IntentPinMenu } from './components/Toolbar/IntentPinMenu'
 import { TextEditor } from './components/Toolbar/TextEditor'
+import { SnapToast } from './components/Toolbar/SnapToast'
+import { RightPanel } from './components/Panel/RightPanel'
 import { useDrawingStore } from './store/drawingStore'
 
 export default function App() {
@@ -18,6 +20,12 @@ export default function App() {
       // ESC: deselect / clear the active marquee, lasso, and lock-region overlay.
       if (e.key === 'Escape') {
         useDrawingStore.getState().clearSelection()
+        return
+      }
+      // F3 (universal CAD OSNAP key) or Ctrl/Cmd+G: master snapping toggle.
+      if (e.key === 'F3' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g')) {
+        e.preventDefault()
+        useDrawingStore.getState().toggleSnapping()
         return
       }
       if (!(e.ctrlKey || e.metaKey)) return
@@ -35,6 +43,9 @@ export default function App() {
   }, [])
 
   const mapActive = useDrawingStore((s) => s.mapActive)
+  const activeLayer = useDrawingStore((s) => s.activeLayer)
+  // The map is the interactive surface only while framing it in the Context layer.
+  const mapInteractive = mapActive && activeLayer === 'CONTEXT'
 
   return (
     // Column shell: a full-width menu bar, the ribbon toolbar, then the canvas
@@ -44,18 +55,28 @@ export default function App() {
       <MenuBar />
       <Ribbon />
 
-      <main className="canvas-area">
-        <CanvasScene />
-        {/* Geospatial overlay, confined to the canvas bounds (loads on demand). */}
-        {mapActive && (
-          <Suspense fallback={null}>
-            <MapView />
-          </Suspense>
-        )}
-      </main>
+      {/* Workspace row: the canvas flexes to fill space left of the layer panel,
+          so the Mapbox underlay (inset:0 within .canvas-area) stays confined to
+          the canvas rather than the whole screen. */}
+      <div className="workspace">
+        <main className="canvas-area">
+          <CanvasScene />
+          {/* Geospatial overlay, confined to the canvas bounds (loads on demand). */}
+          {mapActive && (
+            <Suspense fallback={null}>
+              <MapView />
+            </Suspense>
+          )}
+        </main>
+        <RightPanel />
+      </div>
 
-      {/* Full-viewport pointer crosshair — hidden while the map is active. */}
-      {!mapActive && <Crosshair />}
+      {/* Full-viewport pointer crosshair — shown for drawing (incl. tracing over a
+          frozen map), hidden only while the map is the interactive surface. */}
+      {!mapInteractive && <Crosshair />}
+
+      {/* Transient confirmation when the snapping toggle flips (F3 / Ctrl+G). */}
+      <SnapToast />
 
       {/* Fixed-position menus (anchored to click coordinates). */}
       <NormalizeMenu />

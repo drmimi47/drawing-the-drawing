@@ -1,0 +1,380 @@
+/* Right-panel Layer Hierarchy & Constraints (Foundation A). Fixed-width column to
+   the right of the canvas; the canvas flexes to fill what's left, so the Mapbox
+   underlay (inset:0 within .canvas-area) is naturally confined beside it. */
+.right-panel {
+  flex: 0 0 240px;
+  width: 240px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+
+  background: var(--panel);
+  border-left: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+  overflow-y: auto;
+  user-select: none;
+}
+
+.right-panel-section {
+  padding: 12px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.right-panel-section--grow {
+  flex: 1 1 auto;
+  border-bottom: none;
+}
+
+.right-panel-heading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ---- Layer navigator ---- */
+.layer-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.layer-row:hover {
+  background: var(--hover);
+}
+
+.layer-row.is-active {
+  background: var(--panel-2);
+  border-left-color: var(--accent);
+}
+
+.layer-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  background: var(--panel-2);
+}
+
+.layer-row.is-active .layer-index {
+  color: #fff;
+  background: var(--accent);
+}
+
+.layer-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+
+.layer-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.layer-status {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.layer-row.is-future .layer-label {
+  color: var(--text-dim);
+}
+
+/* Locked (not-yet-reached) steps: greyed and non-interactive until unlocked. */
+.layer-row.is-locked {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+.layer-row.is-locked .layer-index {
+  background: transparent;
+  color: var(--text-dim);
+}
+
+/* ---- Context substrate choice ---- */
+.context-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.context-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.context-option svg {
+  grid-row: 1 / 3;
+  color: var(--text-dim);
+}
+
+.context-option > span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.context-option > small {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.context-option:hover {
+  background: var(--hover);
+}
+
+.context-option.is-active {
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+
+.context-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.context-option.is-active svg {
+  color: var(--accent);
+}
+
+/* ---- Constraints empty state ---- */
+.right-panel-empty {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.right-panel-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+/* ---- Metric rows + advisory delta (Stage 1) ---- */
+.metric-row,
+.delta-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.metric-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.metric-value {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.delta-readout {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border-left: 2px solid var(--accent);
+}
+
+.delta-readout.is-ok {
+  border-left-color: #1f9d55;
+}
+
+.delta-readout .metric-value em {
+  font-style: normal;
+  color: var(--text-dim);
+}
+
+/* ---- Number field ---- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.field-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.field input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 0;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ---- Segmented control (grid type / spacing presets) ---- */
+.seg-group {
+  display: flex;
+  gap: 2px;
+}
+
+.seg-btn {
+  flex: 1 1 0;
+  padding: 6px 4px;
+  border: 1px solid var(--panel-border);
+  border-radius: 0;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.seg-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.seg-btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ---- Panel buttons ---- */
+.panel-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.panel-btn:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.panel-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.panel-btn--danger {
+  color: #c0392b;
+}
+
+/* ---- Constraint (lock) rows ---- */
+.constraint-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.constraint-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--panel-2);
+}
+
+.constraint-row.is-locked {
+  border-left: 2px solid var(--accent);
+}
+
+.constraint-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.lock-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border: 1px solid var(--panel-border);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.lock-toggle[aria-pressed='true'] {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.lock-toggle:hover {
+  background: var(--hover);
+}
+
+.lock-toggle[aria-pressed='true']:hover {
+  background: var(--accent);
+}

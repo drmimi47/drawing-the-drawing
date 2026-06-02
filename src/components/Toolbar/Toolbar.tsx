@@ -10,6 +10,7 @@ import {
   Lock,
   MapPin,
   Hand,
+  Magnet,
   LayoutGrid,
   PanelTop,
   PanelRight,
@@ -102,6 +103,8 @@ export function Toolbar() {
   const setColor = useDrawingStore((s) => s.setColor)
   const setShowIntentLabels = useDrawingStore((s) => s.setShowIntentLabels)
   const toolbarPosition = useDrawingStore((s) => s.toolbarPosition)
+  const snappingEnabled = useDrawingStore((s) => s.snappingEnabled)
+  const toggleSnapping = useDrawingStore((s) => s.toggleSnapping)
 
   const vertical = toolbarPosition === 'left' || toolbarPosition === 'right'
 
@@ -153,6 +156,19 @@ export function Toolbar() {
           />
         </label>
       </div>
+
+      <div className="toolbar-divider" />
+
+      <button
+        type="button"
+        className={`tool-button snap-toggle${snappingEnabled ? ' is-active' : ' snap-toggle--off'}`}
+        title={snappingEnabled ? 'Snapping: On (F3)' : 'Snapping: Off (F3)'}
+        aria-label="Toggle object snapping"
+        aria-pressed={snappingEnabled}
+        onClick={toggleSnapping}
+      >
+        <Magnet size={20} strokeWidth={1.75} />
+      </button>
 
       <div className="toolbar-divider" />
 

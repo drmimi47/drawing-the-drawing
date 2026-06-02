@@ -13,6 +13,11 @@ import { useDrawingStore } from '../../store/drawingStore'
 export function PageSheet() {
   const width = useDrawingStore((s) => s.pageWidth)
   const height = useDrawingStore((s) => s.pageHeight)
+  const context = useDrawingStore((s) => s.context)
+  // In MAP context the dimmed Mapbox underlay fills the artboard, so we skip the
+  // opaque white fill (the transparent canvas lets the map show through). The page
+  // border still draws as a frame.
+  const showPaper = context !== 'MAP'
 
   // Outline as a closed loop of the four page corners.
   const border = useMemo(() => {
@@ -28,11 +33,14 @@ export function PageSheet() {
 
   return (
     <group>
-      {/* White paper, well behind the strokes and field overlays. */}
-      <mesh position={[0, 0, -2]} renderOrder={-10} raycast={() => null}>
-        <planeGeometry args={[width, height]} />
-        <meshBasicMaterial color="#ffffff" toneMapped={false} />
-      </mesh>
+      {/* White paper, well behind the strokes and field overlays. Skipped in MAP
+          context so the Mapbox underlay shows in the artboard instead. */}
+      {showPaper && (
+        <mesh position={[0, 0, -2]} renderOrder={-10} raycast={() => null}>
+          <planeGeometry args={[width, height]} />
+          <meshBasicMaterial color="#ffffff" toneMapped={false} />
+        </mesh>
+      )}
 
       {/* Crisp 1px page border (WebGL lines render at 1px regardless of zoom). */}
       <lineLoop position={[0, 0, -1.9]} renderOrder={-9} raycast={() => null}>

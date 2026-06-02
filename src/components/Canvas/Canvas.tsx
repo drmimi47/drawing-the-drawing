@@ -6,10 +6,11 @@ import { ERASE_RADIUS_PX } from '../../hooks/useEraser'
 import { CameraControls } from './CameraControls'
 import { DrawingLayer } from './DrawingLayer'
 import { PageSheet } from './PageSheet'
+import { GridView } from './GridView'
 import { UnderlayView } from './UnderlayView'
 
 /**
- * Root R3F scene for Blindspot.
+ * Root R3F scene for Bloom.
  *
  * Orthographic camera for a flat 2D workspace (1 world unit = 1 px at zoom 1),
  * a dark workspace backdrop with a centered white page sheet, pan/zoom
@@ -49,19 +50,24 @@ function useCanvasCursor(): string {
 export function CanvasScene() {
   const cursor = useCanvasCursor()
 
+  // Pointer routing is handled by the map overlay's z-index (set per layer in
+  // MapView): in the Context layer the live map sits ABOVE this canvas, so it
+  // captures events within the artboard while the workspace outside falls through
+  // to the R3F camera here; in every other layer the frozen map sits BELOW, so the
+  // canvas captures everything for drawing.
   return (
     <div className="canvas-layer" style={{ cursor }}>
       <Canvas
         orthographic
         camera={{ position: [0, 0, 100], zoom: 1, near: 0.1, far: 1000 }}
-        gl={{ antialias: true, preserveDrawingBuffer: true, stencil: true }}
+        // alpha: the canvas is transparent so the Mapbox underlay shows through
+        // beneath the drawing layers (no opaque scene background).
+        gl={{ antialias: true, preserveDrawingBuffer: true, stencil: true, alpha: true }}
         dpr={[1, 2]}
       >
-        {/* Light grey workspace surrounding the white page sheet. */}
-        <color attach="background" args={['#eef0f3']} />
-
         <CameraControls />
         <PageSheet />
+        <GridView />
         <UnderlayView />
         <DrawingLayer />
       </Canvas>
