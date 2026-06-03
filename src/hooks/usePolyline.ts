@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
 import type { OrthographicCamera } from 'three'
-import { useDrawingStore } from '../store/drawingStore'
+import { useDrawingStore, activeOrigin } from '../store/drawingStore'
 import type { SamplePoint } from '../types/geometry'
 import type { SnapGuide } from '../types/geometry'
 import { SNAP_THRESHOLD_PX, type SnapPoint } from '../geometry/spatialIndex'
@@ -612,8 +612,8 @@ export function usePolyline() {
       if (e.nativeEvent.button !== 0) return
       const pts = pointsRef.current
       const zoom = (camera as OrthographicCamera).zoom || 1
-      const { pageWidth, pageHeight } = useDrawingStore.getState()
-      const raw = clampToPage({ x: e.point.x, y: e.point.y }, pageWidth, pageHeight)
+      const state = useDrawingStore.getState()
+      const raw = clampToPage({ x: e.point.x, y: e.point.y }, state.pageWidth, state.pageHeight, activeOrigin(state))
 
       // Run the full priority matrix at click time (not just the last move result)
       // so the committed vertex is at the precise snapped coordinate.
@@ -642,8 +642,8 @@ export function usePolyline() {
   const onPointerMove = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
       const zoom = (camera as OrthographicCamera).zoom || 1
-      const { pageWidth, pageHeight } = useDrawingStore.getState()
-      const raw = clampToPage({ x: e.point.x, y: e.point.y }, pageWidth, pageHeight)
+      const state = useDrawingStore.getState()
+      const raw = clampToPage({ x: e.point.x, y: e.point.y }, state.pageWidth, state.pageHeight, activeOrigin(state))
       // Run full snap pipeline; store results in refs to be flushed by RAF.
       // Note: for P2/P3 snaps, result.pos is the snapped position (not raw),
       // so the existing effCursor logic in the preview path works without

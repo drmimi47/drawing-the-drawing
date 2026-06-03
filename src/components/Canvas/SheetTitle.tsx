@@ -17,6 +17,9 @@ export function SheetTitle() {
   const setName = useDrawingStore((s) => s.setSheetName)
   const pageWidth = useDrawingStore((s) => s.pageWidth)
   const pageHeight = useDrawingStore((s) => s.pageHeight)
+  const canvases = useDrawingStore((s) => s.canvases)
+  const activeCanvasId = useDrawingStore((s) => s.activeCanvasId)
+  const origin = canvases.find((c) => c.id === activeCanvasId)?.origin ?? { x: 0, y: 0 }
   const viewport = useCanvasStore((s) => s.viewport)
 
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -47,10 +50,11 @@ export function SheetTitle() {
   const ok = size.w > 0 && vw > 0 && vh > 0
   if (!ok) return <div ref={wrapRef} className="sheet-title-overlay" aria-hidden />
 
-  // Artboard bottom-right corner in world space (page is centered at origin). The
-  // title's right edge aligns to the sheet's right edge, just below the bottom edge.
-  const sx = ((pageWidth / 2 - viewport.minX) / vw) * size.w
-  const sy = ((viewport.maxY - -pageHeight / 2) / vh) * size.h
+  // Artboard bottom-right corner in world space (page centered at the active
+  // canvas's origin). The title's right edge aligns to the sheet's right edge,
+  // just below the bottom edge.
+  const sx = ((origin.x + pageWidth / 2 - viewport.minX) / vw) * size.w
+  const sy = ((viewport.maxY - (origin.y - pageHeight / 2)) / vh) * size.h
   const left = sx
   const top = sy + GAP
 

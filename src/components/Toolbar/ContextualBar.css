@@ -1,0 +1,163 @@
+/* Photoshop-style floating contextual task bar. Compact single row, draggable by
+   the gripper, confined to (and positioned within) the canvas area. */
+.ctx-bar {
+  position: absolute;
+  z-index: 14; /* above the crosshair (12) and sheet overlays */
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 5px 0 2px;
+  background: var(--panel, #ffffff);
+  border: 1px solid var(--panel-border, #d7dbe2);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(20, 30, 60, 0.18);
+  user-select: none;
+}
+
+.ctx-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim, #8a92a0);
+  cursor: grab;
+  touch-action: none;
+}
+.ctx-grip:active {
+  cursor: grabbing;
+}
+
+.ctx-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 6px 2px;
+  background: var(--panel-border, #e2e5ea);
+}
+
+.ctx-field {
+  position: relative;
+  display: flex;
+}
+
+/* Generic compact control button. */
+.ctx-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text, #1c2330);
+  cursor: pointer;
+  transition: background 110ms ease, border-color 110ms ease;
+}
+.ctx-btn:hover,
+.ctx-btn.is-open {
+  background: var(--hover, rgba(20, 30, 60, 0.06));
+}
+.ctx-btn svg {
+  color: var(--text-dim, #8a92a0);
+}
+
+.ctx-color-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+}
+
+/* Upward popover (the bar usually sits near the bottom of the canvas). */
+.ctx-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  background: var(--panel, #ffffff);
+  border: 1px solid var(--panel-border, #d7dbe2);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(20, 30, 60, 0.18);
+  padding: 6px;
+}
+.ctx-popover--swatches {
+  display: flex;
+  gap: 5px;
+}
+
+.ctx-swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.ctx-swatch.is-active {
+  outline: 2px solid var(--accent, #2f6fed);
+  outline-offset: 1px;
+}
+.ctx-swatch--custom {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  background:
+    conic-gradient(from 0deg, #ff4d4d, #ffd24d, #4dff88, #4dd2ff, #b04dff, #ff4d4d);
+}
+.ctx-swatch--custom input {
+  position: absolute;
+  inset: -4px;
+  width: 200%;
+  height: 200%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* Line-weight presets. */
+.ctx-weights {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.ctx-weight {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 110ms ease, border-color 110ms ease;
+}
+.ctx-weight:hover {
+  background: var(--hover, rgba(20, 30, 60, 0.06));
+}
+.ctx-weight.is-active {
+  background: rgba(47, 111, 237, 0.1);
+  border-color: rgba(47, 111, 237, 0.45);
+}
+.ctx-weight-glyph {
+  display: block;
+  width: 16px;
+  min-height: 1px;
+  border-radius: 2px;
+  background: var(--text, #1c2330);
+}
+.ctx-weight.is-active .ctx-weight-glyph {
+  background: var(--accent, #2f6fed);
+}
+
+/* Pseudo (placeholder) text-size control. */
+.ctx-size-pseudo {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text, #1c2330);
+  cursor: default;
+  opacity: 0.85;
+}

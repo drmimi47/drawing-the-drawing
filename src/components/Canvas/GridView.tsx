@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useDrawingStore } from '../../store/drawingStore'
+import { useDrawingStore, type GridType, type Underlay, type CanvasContext } from '../../store/drawingStore'
 
 /**
  * Blank-sheet background grid (Context substrate = "Blank sheet").
@@ -66,14 +66,26 @@ function pushFamily(angleDeg: number, d: number, hw: number, hh: number, out: nu
   }
 }
 
-export function GridView() {
-  const context = useDrawingStore((s) => s.context)
-  const underlay = useDrawingStore((s) => s.underlay)
-  const gridType = useDrawingStore((s) => s.gridType)
-  const spacing = useDrawingStore((s) => s.gridSpacing)
-  const width = useDrawingStore((s) => s.pageWidth)
-  const height = useDrawingStore((s) => s.pageHeight)
-
+/**
+ * The grid geometry itself, with everything passed explicitly. Used for the active
+ * board (values from the store via <GridView/>) and for each read-only neighbor
+ * board (values from its document), so a board's grid stays visible when parked.
+ */
+export function GridLattice({
+  context,
+  underlay,
+  gridType,
+  spacing,
+  width,
+  height,
+}: {
+  context: CanvasContext | null
+  underlay: Underlay | null
+  gridType: GridType
+  spacing: number
+  width: number
+  height: number
+}) {
   const { lines, dots } = useMemo(() => {
     const hw = width / 2
     const hh = height / 2
@@ -127,5 +139,25 @@ export function GridView() {
       </bufferGeometry>
       <lineBasicMaterial color={COLOR} toneMapped={false} />
     </lineSegments>
+  )
+}
+
+/** Active-board grid: pulls the substrate + grid settings from the live store. */
+export function GridView() {
+  const context = useDrawingStore((s) => s.context)
+  const underlay = useDrawingStore((s) => s.underlay)
+  const gridType = useDrawingStore((s) => s.gridType)
+  const spacing = useDrawingStore((s) => s.gridSpacing)
+  const width = useDrawingStore((s) => s.pageWidth)
+  const height = useDrawingStore((s) => s.pageHeight)
+  return (
+    <GridLattice
+      context={context}
+      underlay={underlay}
+      gridType={gridType}
+      spacing={spacing}
+      width={width}
+      height={height}
+    />
   )
 }

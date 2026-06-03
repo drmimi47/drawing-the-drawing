@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { useDrawingStore } from '../../store/drawingStore'
 
 /**
- * Lot boundary (Bloom restructure — Stage 1). Renders store.boundary as a closed
+ * Lot boundary (Gradia Draw restructure — Stage 1). Renders store.boundary as a closed
  * loop in world space — the master working frame ("a canvas within the canvas") —
  * plus a translucent interior fill whose opacity is user-controlled (INFILL
  * OPACITY slider).

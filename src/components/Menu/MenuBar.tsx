@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react'
  * Top application menu bar (Bluebeam / desktop-app style). "File" and "Document"
  * open snappy, non-rounded dropdown lists. The items are placeholders for now —
  * they close the menu without performing an action.
+ *
+ * Brand: a plain bold "GradiaDraw" sans wordmark (no mark).
  */
 
 const MENUS: { label: string; items: string[] }[] = [
@@ -24,7 +26,7 @@ export function MenuBar() {
 
   return (
     <header className="menu-bar" onPointerDown={(e) => e.stopPropagation()}>
-      <span className="menu-bar-brand">Bloom</span>
+      <span className="menu-bar-brand">GradiaDraw</span>
 
       <nav className="menu-bar-menus">
         {MENUS.map(({ label, items }) => (

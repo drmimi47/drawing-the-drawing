@@ -8,9 +8,10 @@ import { DrawingLayer } from './DrawingLayer'
 import { PageSheet } from './PageSheet'
 import { GridView } from './GridView'
 import { UnderlayView } from './UnderlayView'
+import { InactiveCanvases } from './InactiveCanvases'
 
 /**
- * Root R3F scene for Bloom.
+ * Root R3F scene for Gradia Draw.
  *
  * Orthographic camera for a flat 2D workspace (1 world unit = 1 px at zoom 1),
  * a dark workspace backdrop with a centered white page sheet, pan/zoom
@@ -47,8 +48,17 @@ function useCanvasCursor(): string {
   }, [toolMode, isSpaceDown, isPanning])
 }
 
+/** World-space origin of the currently active canvas (central canvas = 0,0). */
+function useActiveOrigin(): [number, number] {
+  const canvases = useDrawingStore((s) => s.canvases)
+  const activeCanvasId = useDrawingStore((s) => s.activeCanvasId)
+  const active = canvases.find((c) => c.id === activeCanvasId)
+  return [active?.origin.x ?? 0, active?.origin.y ?? 0]
+}
+
 export function CanvasScene() {
   const cursor = useCanvasCursor()
+  const [ox, oy] = useActiveOrigin()
 
   // Pointer routing is handled by the map overlay's z-index (set per layer in
   // MapView): in the Context layer the live map sits ABOVE this canvas, so it
@@ -66,9 +76,16 @@ export function CanvasScene() {
         dpr={[1, 2]}
       >
         <CameraControls />
-        <PageSheet />
-        <GridView />
-        <UnderlayView />
+        {/* Read-only neighbor canvases (design-option branches) at their offsets. */}
+        <InactiveCanvases />
+        {/* The active canvas's page furniture is defined in local (origin-centered)
+            coordinates, so it's translated to the active canvas's world origin. The
+            DrawingLayer geometry is stored in absolute world coords and is NOT. */}
+        <group position={[ox, oy, 0]}>
+          <PageSheet />
+          <GridView />
+          <UnderlayView />
+        </group>
         <DrawingLayer />
       </Canvas>
     </div>

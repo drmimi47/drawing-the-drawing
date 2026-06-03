@@ -5,6 +5,8 @@ import { TextOverlay } from './components/Canvas/TextOverlay'
 import { ScribbleOverlay } from './components/Canvas/ScribbleOverlay'
 import { SheetTitle } from './components/Canvas/SheetTitle'
 import { SheetScale } from './components/Canvas/SheetScale'
+import { CanvasBranchControls } from './components/Canvas/CanvasBranchControls'
+import { ContextualBar } from './components/Toolbar/ContextualBar'
 import { MenuBar } from './components/Menu/MenuBar'
 import { Ribbon } from './components/Ribbon/Ribbon'
 import { Crosshair } from './components/Crosshair/Crosshair'
@@ -83,11 +85,16 @@ export default function App() {
           <SheetTitle />
           {/* Real-world scale readout at the artboard's bottom-left corner. */}
           <SheetScale />
+          {/* "+" controls just outside each edge of the active canvas → spawn a
+              neighboring design-option canvas in that cardinal direction. */}
+          <CanvasBranchControls />
           {/* CAD crosshair — inside canvas-area so overflow:hidden clips it to the
               canvas and it never bleeds over the right panel. */}
           {!mapInteractive && <Crosshair />}
           {/* Ghost "add text" preview that trails the cursor with the Text tool. */}
           <TextHoverPreview />
+          {/* Photoshop-style contextual options bar (Scribble / Text tools). */}
+          <ContextualBar />
         </main>
         <RightPanel />
       </div>

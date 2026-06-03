@@ -5,7 +5,7 @@ import type { CirculationPath } from '../../types/geometry'
 import { buildStrokeGeometry } from './strokeGeometry'
 
 /**
- * Circulation corridors (Bloom restructure — Stage 2).
+ * Circulation corridors (Gradia Draw restructure — Stage 2).
  *
  * In the Circulation layer (and forward) the corridor bands render as a SINGLE
  * flat-shaded region: every band's geometry is marked into the stencil buffer
@@ -64,8 +64,9 @@ function CorridorMask({ path }: { path: CirculationPath }) {
   )
 }
 
-/** Single uniform grey fill clipped to the stencil-marked corridor union. */
-function CorridorUnion({ paths }: { paths: CirculationPath[] }) {
+/** Single uniform grey fill clipped to the stencil-marked corridor union. Exported
+ *  so read-only neighbor boards (InactiveCanvases) render the same offset bands. */
+export function CorridorUnion({ paths }: { paths: CirculationPath[] }) {
   const masks = paths.map((p) => <CorridorMask key={p.id} path={p} />)
 
   // A quad covering the bounding box of every band (centerlines padded by half the

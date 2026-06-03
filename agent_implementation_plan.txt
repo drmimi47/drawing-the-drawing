@@ -1,5 +1,5 @@
 ================================================================================
-BLOOM — LLM IMPLEMENTATION & SPECIFICATION PLAN
+GRADIA DRAW — LLM IMPLEMENTATION & SPECIFICATION PLAN
 Purpose: Task-grouped context file optimized for automated coding agents.
 Objective: Address core technical gaps, precision mechanics, and UX alignment.
 ================================================================================

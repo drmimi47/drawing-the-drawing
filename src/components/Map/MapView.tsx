@@ -29,6 +29,9 @@ import './MapView.css'
  */
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
+/** Map style URL — set VITE_MAPBOX_STYLE to a published Mapbox Studio style; falls
+ *  back to the stock streets style. (The custom style's account must own the token.) */
+const STYLE = import.meta.env.VITE_MAPBOX_STYLE || 'mapbox://styles/mapbox/streets-v12'
 
 const SQM_TO_SQFT = 10.7639
 const SQM_TO_ACRE = 1 / 4046.8564224
@@ -127,7 +130,7 @@ export function MapView() {
 
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
+      style: STYLE,
       center: [-122.4194, 37.7749],
       zoom: 16,
       // Required so the canvas can be snapshotted to a PNG when the map freezes.

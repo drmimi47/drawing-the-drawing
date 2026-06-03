@@ -72,20 +72,6 @@
   letter-spacing: 0.01em;
 }
 
-/* Colored circle dot shown inside the Color button */
-.rail-color-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.2);
-  flex-shrink: 0;
-}
-
-/* Generate button sits dimmed at the far right */
-.rail-generate {
-  margin-right: 4px;
-}
-
 /* ---- Dropdown wrapper (button + floating panel as one unit) ---- */
 .rail-dropdown-wrap {
   position: relative;
@@ -141,69 +127,4 @@
 .rail-float-item:disabled {
   opacity: 0.38;
   cursor: default;
-}
-
-.rail-float-divider {
-  height: 1px;
-  background: var(--panel-border);
-  margin: 3px 0;
-}
-
-/* ---- Pen (lineweight + style) preview swatch ---- */
-.rail-line-preview {
-  flex-shrink: 0;
-  color: var(--text);
-  overflow: visible;
-}
-
-.rail-float-item.is-active .rail-line-preview {
-  color: var(--accent);
-}
-
-/* ---- Color picker panel ---- */
-.rail-float-swatches {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 9px 10px;
-}
-
-.rail-swatch {
-  position: relative;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 1px solid var(--panel-border);
-  border-radius: 2px;
-  cursor: pointer;
-  overflow: hidden;
-  transition: box-shadow 120ms ease;
-  flex-shrink: 0;
-}
-
-.rail-swatch:hover {
-  border-color: var(--text-dim);
-}
-
-.rail-swatch.is-active {
-  box-shadow: 0 0 0 2px var(--accent);
-}
-
-.rail-swatch-custom {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: conic-gradient(red, orange, yellow, green, blue, violet, red);
-  cursor: pointer;
-}
-
-.rail-swatch-custom input[type='color'] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  border: none;
-  padding: 0;
-  cursor: pointer;
 }

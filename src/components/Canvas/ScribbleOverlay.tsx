@@ -14,7 +14,12 @@ import type { ScribbleStroke } from '../../types/geometry'
 export function ScribbleOverlay() {
   const scribbles = useDrawingStore((s) => s.scribbles)
   const live = useDrawingStore((s) => s.liveScribble)
+  const inactiveCanvasDocs = useDrawingStore((s) => s.inactiveCanvasDocs)
   const viewport = useCanvasStore((s) => s.viewport)
+
+  // Neighbor boards' scribbles (read-only; absolute world coords like the active
+  // board's), so a board's marks stay visible when it's parked.
+  const ghostScribbles = Object.values(inactiveCanvasDocs).flatMap((doc) => doc.scribbles)
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -75,9 +80,10 @@ export function ScribbleOverlay() {
       ctx.stroke()
     }
 
+    for (const st of ghostScribbles) drawStroke(st)
     for (const st of scribbles) drawStroke(st)
     if (live) drawStroke(live)
-  }, [scribbles, live, viewport, size])
+  }, [ghostScribbles, scribbles, live, viewport, size])
 
   return (
     <div ref={wrapRef} className="scribble-overlay" aria-hidden>

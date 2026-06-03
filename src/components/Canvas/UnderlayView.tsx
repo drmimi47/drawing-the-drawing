@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
-import { useDrawingStore } from '../../store/drawingStore'
+import { useDrawingStore, type Underlay } from '../../store/drawingStore'
 
 /**
  * Read-only tracing underlay: the imported PDF page / image, dimmed, placed on
@@ -10,8 +10,11 @@ import { useDrawingStore } from '../../store/drawingStore'
  * fields, and all strokes, and never receives raycasts — purely a backdrop to
  * trace over that can't be edited or selected.
  */
-export function UnderlayView() {
-  const underlay = useDrawingStore((s) => s.underlay)
+export function UnderlayView({ underlay: explicit }: { underlay?: Underlay | null } = {}) {
+  // Active board reads the live underlay; a neighbor board passes its own (which may
+  // be null). `undefined` means "not provided" → fall back to the store.
+  const storeUnderlay = useDrawingStore((s) => s.underlay)
+  const underlay = explicit !== undefined ? explicit : storeUnderlay
 
   const texture = useMemo(() => {
     if (!underlay) return null

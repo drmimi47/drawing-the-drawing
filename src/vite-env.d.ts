@@ -3,6 +3,8 @@
 interface ImportMetaEnv {
   /** Mapbox GL JS access token (see .env). */
   readonly VITE_MAPBOX_TOKEN?: string
+  /** Mapbox style URL (a published Studio style); defaults to mapbox/streets-v12. */
+  readonly VITE_MAPBOX_STYLE?: string
 }
 
 interface ImportMeta {

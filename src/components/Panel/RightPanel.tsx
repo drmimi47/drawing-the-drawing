@@ -6,7 +6,7 @@ import { importUnderlay } from '../../io/importUnderlay'
 import './RightPanel.css'
 
 /**
- * Right-panel "Layer Hierarchy" (Bloom restructure — Foundation A).
+ * Right-panel "Layer Hierarchy" (Gradia Draw restructure — Foundation A).
  *
  *   (1) LAYER NAVIGATOR — the pipeline as a revisitable vertical stack. Clicking a
  *       layer activates it (and its default tool); switching layers is what
@@ -43,6 +43,7 @@ export function RightPanel() {
   const boundary = useDrawingStore((s) => s.boundary)
   const circulationPaths = useDrawingStore((s) => s.circulationPaths)
   const maxLayerReached = useDrawingStore((s) => s.maxLayerReached)
+  const sheetName = useDrawingStore((s) => s.sheetName)
 
   const layerStatus = (key: PipelineLayer): string => {
     if (key === 'CONTEXT') return context ? (context === 'MAP' ? 'Map underlay' : 'Blank sheet') : 'Choose a substrate'
@@ -61,6 +62,12 @@ export function RightPanel() {
 
   return (
     <aside className="right-panel" aria-label="Layer hierarchy and constraints">
+      {/* The layer hierarchy below belongs to the ACTIVE board — each board keeps its
+          own independent layer memory. */}
+      <div className="right-panel-section board-header">
+        <h2 className="board-name" title={sheetName}>{sheetName}</h2>
+      </div>
+
       <div className="right-panel-section">
         <h2 className="right-panel-heading">Layers</h2>
         <ul className="layer-list" role="tablist" aria-orientation="vertical">

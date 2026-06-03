@@ -47,15 +47,11 @@ export type ToolMode =
   | 'LASSO_LOCK'
   | 'INTENT_PIN'
   | 'TEXT'
-export type Stage = 'SKETCH' | 'NORMALIZE' | 'LOCK_INTENT' | 'GENERATE'
-export type ToolbarPosition = 'top' | 'right' | 'bottom' | 'left'
 
 /**
- * Bloom restructure (restructure_v1.txt) — the guided constraint-accumulating
+ * Gradia Draw restructure (restructure_v1.txt) — the guided constraint-accumulating
  * pipeline. The active layer is surfaced by the right-panel Layer Navigator
  * (Foundation A) and gates the workflow top-down while staying revisitable.
- * Introduced alongside (not replacing) the legacy `stage` so existing UI keeps
- * working during the transition.
  */
 export type PipelineLayer =
   | 'CONTEXT'
@@ -84,6 +80,64 @@ export const LAYER_ORDER: PipelineLayer[] = [
 /** Default artboard size in world units (3:2 landscape, ARCH-D-like). */
 export const DEFAULT_PAGE_WIDTH = 1080
 export const DEFAULT_PAGE_HEIGHT = 720
+
+/** World-unit gutter left between adjacent design-option canvases so they never touch. */
+export const CANVAS_GAP = 160
+
+export type CardinalDirection = 'N' | 'E' | 'S' | 'W'
+
+/** How a newly spawned board is seeded: a blank slate, or a full copy (branch) of
+ *  the currently selected board's state (geometry translated to the new location). */
+export type CanvasInitMode = 'blank' | 'copy'
+
+/**
+ * A parallel design-option canvas ("branch"). Each canvas is a self-contained
+ * document living at a world-space `origin` offset; all of its geometry is stored
+ * in ABSOLUTE world coordinates near that origin. The CENTRAL canvas sits at
+ * origin (0,0), so the single-canvas behavior is unchanged.
+ *
+ * The ACTIVE canvas's document is the live top-level store fields (so every tool
+ * keeps editing it directly); inactive canvases are kept as snapshots in
+ * `inactiveCanvasDocs` and rendered read-only at their offsets.
+ */
+export interface CanvasEntry {
+  id: string
+  origin: { x: number; y: number }
+}
+
+/**
+ * A snapshotted per-canvas document (everything that is canvas-local, not
+ * app-global). Each board carries its OWN layer pipeline memory — the active layer,
+ * how far the sequential unlock has progressed, the chosen substrate (context), the
+ * grid/scale settings, and all the per-layer geometry — so switching boards swaps in
+ * a wholly independent workflow state and a brand-new board starts at "choose a
+ * substrate" exactly as a freshly loaded page does.
+ */
+export interface CanvasDoc {
+  graph: Graph
+  lockPolygons: LockPolygon[]
+  intentPins: IntentPin[]
+  textLabels: TextLabel[]
+  scribbles: ScribbleStroke[]
+  boundary: Boundary | null
+  circulationPaths: CirculationPath[]
+  underlay: Underlay | null
+  pageWidth: number
+  pageHeight: number
+  sheetName: string
+  // ── Per-board layer pipeline memory ──
+  activeLayer: PipelineLayer
+  maxLayerReached: number
+  context: CanvasContext | null
+  gridType: GridType
+  gridSpacing: number
+  boundaryInfillOpacity: number
+  circulationWidth: number
+  metersPerWorldUnit: number | null
+  mapActive: boolean
+  mapDim: number
+  mapGeometry: GeoJSON.FeatureCollection | null
+}
 
 /** Fraction of the page frame an imported asset is fit within (keeps a margin). */
 const UNDERLAY_FIT_MARGIN = 0.92
@@ -133,18 +187,21 @@ let pinCounter = 0
 let textCounter = 0
 let circulationCounter = 0
 let scribbleCounter = 0
+let canvasCounter = 0
 
 const HISTORY_LIMIT = 100
 
-/** One undo/redo step: a snapshot of everything that an action can change. */
+/**
+ * One undo/redo step. Captures the FULL multi-board world at the moment before an
+ * action: the active board's document, which board was active, and the canvas list
+ * + the other boards' documents. This lets a single global timeline cover both
+ * per-board geometry edits AND structural actions like creating a board.
+ */
 interface HistoryEntry {
-  graph: Graph
-  lockPolygons: LockPolygon[]
-  intentPins: IntentPin[]
-  textLabels: TextLabel[]
-  boundary: Boundary | null
-  circulationPaths: CirculationPath[]
-  scribbles: ScribbleStroke[]
+  activeDoc: CanvasDoc
+  activeCanvasId: string
+  canvases: CanvasEntry[]
+  inactiveCanvasDocs: Record<string, CanvasDoc>
 }
 
 /** Transient text being placed/edited, or null. */
@@ -172,7 +229,6 @@ export interface PendingPin {
 
 interface DrawingState {
   toolMode: ToolMode
-  stage: Stage
   strokeColor: string
   /** Active pen weight — nominal stroke width in world units (1 unit = 1px @ zoom 1). */
   baseWidth: number
@@ -203,8 +259,6 @@ interface DrawingState {
   /** When true, overlay a grid of region intent-concentration percentages
    *  (driven by toolbar hover over the Intent Pin button). */
   showIntentGrid: boolean
-  /** Which edge the main tool dock is docked to. */
-  toolbarPosition: ToolbarPosition
   /** Artboard (page sheet) size in world units. Independent world coordinate
    *  frame — NOT driven by imports; only the user/default sets it. */
   pageWidth: number
@@ -224,7 +278,7 @@ interface DrawingState {
   mapGeometry: GeoJSON.FeatureCollection | null
   /** Active CAD snap guide emitted by the polyline snapping pipeline (Step 1). */
   activeSnapGuide: SnapGuide | null
-  /** Active pipeline layer (Bloom restructure — right-panel Layer Navigator). */
+  /** Active pipeline layer (Gradia Draw restructure — right-panel Layer Navigator). */
   activeLayer: PipelineLayer
   /** Highest layer index the user has reached; gates the sequential unlock (they
    *  can revisit any reached layer and step forward one at a time). */
@@ -256,6 +310,21 @@ interface DrawingState {
   past: HistoryEntry[]
   future: HistoryEntry[]
 
+  /** All design-option canvases (incl. the active one), with their world origins. */
+  canvases: CanvasEntry[]
+  /** Which canvas's document is currently live in the top-level fields above. */
+  activeCanvasId: string
+  /** Snapshotted documents for the NON-active canvases (rendered read-only). */
+  inactiveCanvasDocs: Record<string, CanvasDoc>
+
+  /** Spawn a neighbor canvas adjacent to the active one in a cardinal direction
+   *  (spaced by CANVAS_GAP so they never touch). `mode` chooses a blank slate or a
+   *  full copy of the current board (geometry translated to the new location).
+   *  Does not switch focus. */
+  addCanvas: (direction: CardinalDirection, mode?: CanvasInitMode) => void
+  /** Make a canvas active: snapshot the current live document, load the target's. */
+  setActiveCanvas: (id: string) => void
+
   /** Write the active snap guide (or clear it by passing null). Called each pointer-move frame by the polyline snapping pipeline. */
   setSnapGuide: (guide: SnapGuide | null) => void
   /** Flip the master snapping switch. Clears any live guide when turning off so
@@ -267,7 +336,6 @@ interface DrawingState {
   /** Drop all O-TRACK anchors. */
   clearTrackedPoints: () => void
   setTool: (tool: ToolMode) => void
-  setStage: (stage: Stage) => void
   /** Switch the active pipeline layer (right-panel navigator). */
   setActiveLayer: (layer: PipelineLayer) => void
   /** Choose the Context substrate; MAP turns the Mapbox overlay on, BLANK off. */
@@ -324,7 +392,6 @@ interface DrawingState {
   moveText: (id: string, x: number, y: number) => void
   setShowIntentLabels: (show: boolean) => void
   setShowIntentGrid: (show: boolean) => void
-  setToolbarPosition: (position: ToolbarPosition) => void
   /** Rename the current artboard (sheet title). */
   setSheetName: (name: string) => void
   /** Resize the independent world frame (page sheet) in world units. */
@@ -344,6 +411,12 @@ interface DrawingState {
   setMapGeometry: (geometry: GeoJSON.FeatureCollection | null) => void
   /** Move vertices (used to preview/commit normalize); does not record undo history. */
   setVertexPositions: (updates: Record<string, { x: number; y: number }>) => void
+  /** Move one lot-boundary ring vertex live (Edit tool drag); no undo history per
+   *  move — the caller snapshots once on grab via beginHistory(). */
+  setBoundaryPoint: (index: number, x: number, y: number) => void
+  /** Move one circulation centerline vertex live (Edit tool drag); rebuilds the
+   *  corridor mask; no undo history per move (caller snapshots on grab). */
+  setCirculationPoint: (pathId: string, index: number, x: number, y: number) => void
 
   /** Snapshot current state onto the undo stack (call once at the start of an action). */
   beginHistory: () => void
@@ -369,7 +442,6 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   // Starts in the Context layer (map setup), where creation tools are disabled, so
   // the initial tool is Pan rather than Draw.
   toolMode: 'PAN',
-  stage: 'SKETCH',
   strokeColor: '#1a1a1a',
   baseWidth: 2,
   lineStyle: 'solid',
@@ -385,10 +457,9 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   liveScribble: null,
   showIntentLabels: false,
   showIntentGrid: false,
-  toolbarPosition: 'bottom',
   pageWidth: DEFAULT_PAGE_WIDTH,
   pageHeight: DEFAULT_PAGE_HEIGHT,
-  sheetName: 'Central 01',
+  sheetName: 'Board 01',
   underlay: null,
   metersPerWorldUnit: null,
   mapActive: false,
@@ -410,6 +481,56 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   past: [],
   future: [],
 
+  canvases: [{ id: 'canvas-central', origin: { x: 0, y: 0 } }],
+  activeCanvasId: 'canvas-central',
+  inactiveCanvasDocs: {},
+
+  addCanvas: (direction, mode = 'blank') =>
+    set((state) => {
+      const active = state.canvases.find((c) => c.id === state.activeCanvasId)
+      if (!active) return {}
+      const w = state.pageWidth
+      const h = state.pageHeight
+      const origin = freeOriginInDirection(state, active.origin, direction, w, h)
+      const id = `canvas-${Date.now()}-${canvasCounter++}`
+      const name = `Board ${String(state.canvases.length + 1).padStart(2, '0')}`
+      // 'copy' branches the current board: clone its full document and translate all
+      // (absolute-world-coord) geometry by the offset to the new board's location, so
+      // the duplicate sits in its own slot rather than on top of the original.
+      const doc =
+        mode === 'copy'
+          ? {
+              ...translateCanvasDoc(captureCanvasDoc(state), origin.x - active.origin.x, origin.y - active.origin.y),
+              sheetName: name,
+            }
+          : blankCanvasDoc(w, h, name)
+      return {
+        // Creating a board is undoable: snapshot the pre-creation world first.
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        canvases: [...state.canvases, { id, origin }],
+        inactiveCanvasDocs: { ...state.inactiveCanvasDocs, [id]: doc },
+      }
+    }),
+  setActiveCanvas: (id) =>
+    set((state) => {
+      if (id === state.activeCanvasId) return {}
+      const targetDoc = state.inactiveCanvasDocs[id]
+      if (!targetDoc) return {}
+      // Snapshot the current live document into the inactive map, then load the
+      // target's document into the live top-level fields.
+      const inactive = { ...state.inactiveCanvasDocs, [state.activeCanvasId]: captureCanvasDoc(state) }
+      delete inactive[id]
+      return {
+        ...applyCanvasDoc(targetDoc),
+        activeCanvasId: id,
+        inactiveCanvasDocs: inactive,
+        // A board still at the Context layer has no substrate yet — drop to Pan so it
+        // reads as a fresh "choose a substrate" setup rather than a live draw tool.
+        toolMode: targetDoc.activeLayer === 'CONTEXT' ? 'PAN' : state.toolMode,
+      }
+    }),
+
   setSnapGuide: (guide) => set({ activeSnapGuide: guide }),
   toggleSnapping: () =>
     set((state) => ({
@@ -425,18 +546,35 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   clearTrackedPoints: () =>
     set((state) => (state.trackedPoints.length ? { trackedPoints: [] } : {})),
   setTool: (tool) =>
-    set((state) => ({
-      toolMode: tool,
-      // Leaving the selection tools clears the highlight so it doesn't linger.
-      selectedStrokeIds: SELECTION_TOOLS.has(tool) ? state.selectedStrokeIds : [],
-      // Abandon any in-progress pin/text placement when leaving those tools.
-      pendingPin: tool === 'INTENT_PIN' ? state.pendingPin : null,
-      pendingText: tool === 'TEXT' ? state.pendingText : null,
-      // Clear any active snap guide + O-TRACK anchors when leaving the polyline tool.
-      activeSnapGuide: tool === 'POLYLINE' ? state.activeSnapGuide : null,
-      trackedPoints: tool === 'POLYLINE' ? state.trackedPoints : [],
-    })),
-  setStage: (stage) => set({ stage }),
+    set((state) => {
+      const base = {
+        toolMode: tool,
+        // Leaving the selection tools clears the highlight so it doesn't linger.
+        selectedStrokeIds: SELECTION_TOOLS.has(tool) ? state.selectedStrokeIds : [],
+        // Abandon any in-progress pin/text placement when leaving those tools.
+        pendingPin: tool === 'INTENT_PIN' ? state.pendingPin : null,
+        pendingText: tool === 'TEXT' ? state.pendingText : null,
+        // Clear any active snap guide + O-TRACK anchors when leaving the polyline tool.
+        activeSnapGuide: tool === 'POLYLINE' ? state.activeSnapGuide : null,
+        trackedPoints: tool === 'POLYLINE' ? state.trackedPoints : [],
+      }
+      // Leaving the Edit tool: re-trim circulation centerlines back inside the lot
+      // boundary, since vertex edits (to a corridor OR to the boundary itself) may
+      // have pushed parts outside — same clipping the Polyline tool applies on
+      // commit. Recorded as one undo step.
+      if (state.toolMode === 'VECTOR' && tool !== 'VECTOR') {
+        const trimmed = trimCirculationToBoundary(state)
+        if (trimmed) {
+          return {
+            ...base,
+            past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+            future: [],
+            ...trimmed,
+          }
+        }
+      }
+      return base
+    }),
   setActiveLayer: (layer) =>
     set((state) => ({
       activeLayer: layer,
@@ -690,7 +828,6 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     set((state) => ({ textLabels: state.textLabels.map((l) => (l.id === id ? { ...l, x, y } : l)) })),
   setShowIntentLabels: (show) => set({ showIntentLabels: show }),
   setShowIntentGrid: (show) => set({ showIntentGrid: show }),
-  setToolbarPosition: (position) => set({ toolbarPosition: position }),
   setSheetName: (name) => set({ sheetName: name }),
   setPageSize: (width, height) =>
     set((state) => {
@@ -736,6 +873,28 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         }
       }
       return { graph: { vertices, strokes: state.graph.strokes } }
+    }),
+  setBoundaryPoint: (index, x, y) =>
+    set((state) => {
+      if (!state.boundary) return {}
+      const ring = state.boundary.ring
+      if (index < 0 || index >= ring.length) return {}
+      const next = ring.slice()
+      next[index] = { x, y }
+      return { boundary: { ...state.boundary, ring: next } }
+    }),
+  setCirculationPoint: (pathId, index, x, y) =>
+    set((state) => {
+      let changed = false
+      const circulationPaths = state.circulationPaths.map((p) => {
+        if (p.id !== pathId || index < 0 || index >= p.centerline.length) return p
+        const centerline = p.centerline.slice()
+        centerline[index] = { x, y }
+        changed = true
+        return { ...p, centerline }
+      })
+      if (!changed) return {}
+      return { circulationPaths, circulationMask: buildCirculationMask(circulationPaths) }
     }),
 
   beginHistory: () =>
@@ -847,11 +1006,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       const past = state.past.slice()
       const previous = past.pop()!
       return {
-        graph: previous.graph,
-        lockPolygons: previous.lockPolygons,
-        intentPins: previous.intentPins,
-        textLabels: previous.textLabels,
-        ...restoreFeatures(previous),
+        ...restoreEntry(state, previous),
         past,
         future: [...state.future, snapshot(state)].slice(-HISTORY_LIMIT),
       }
@@ -862,11 +1017,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       const future = state.future.slice()
       const next = future.pop()!
       return {
-        graph: next.graph,
-        lockPolygons: next.lockPolygons,
-        intentPins: next.intentPins,
-        textLabels: next.textLabels,
-        ...restoreFeatures(next),
+        ...restoreEntry(state, next),
         future,
         past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
       }
@@ -877,11 +1028,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       const past = state.past.slice()
       const previous = past.pop()!
       return {
-        graph: previous.graph,
-        lockPolygons: previous.lockPolygons,
-        intentPins: previous.intentPins,
-        textLabels: previous.textLabels,
-        ...restoreFeatures(previous),
+        ...restoreEntry(state, previous),
         past,
       }
     }),
@@ -893,40 +1040,57 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     })),
 }))
 
-function snapshot(state: {
-  graph: Graph
-  lockPolygons: LockPolygon[]
-  intentPins: IntentPin[]
-  textLabels: TextLabel[]
-  boundary: Boundary | null
-  circulationPaths: CirculationPath[]
-  scribbles: ScribbleStroke[]
-}): HistoryEntry {
+/** Full multi-board world snapshot taken before any undoable action. */
+function snapshot(state: DrawingState): HistoryEntry {
   return {
-    graph: state.graph,
-    lockPolygons: state.lockPolygons,
-    intentPins: state.intentPins,
-    textLabels: state.textLabels,
-    boundary: state.boundary,
-    circulationPaths: state.circulationPaths,
-    scribbles: state.scribbles,
+    activeDoc: captureCanvasDoc(state),
+    activeCanvasId: state.activeCanvasId,
+    canvases: state.canvases,
+    inactiveCanvasDocs: state.inactiveCanvasDocs,
   }
 }
 
-/** Restore the boundary + circulation + scribble portion of a history entry. */
-function restoreFeatures(entry: HistoryEntry) {
+/** The active board's geometry/feature fields from a doc (the classic undo subset —
+ *  deliberately excludes layer/substrate state so undo never re-navigates layers). */
+function restoreActiveGeometry(doc: CanvasDoc): Partial<DrawingState> {
   return {
-    boundary: entry.boundary,
-    circulationPaths: entry.circulationPaths,
-    circulationMask: entry.circulationPaths.length ? buildCirculationMask(entry.circulationPaths) : null,
-    scribbles: entry.scribbles,
+    graph: doc.graph,
+    lockPolygons: doc.lockPolygons,
+    intentPins: doc.intentPins,
+    textLabels: doc.textLabels,
+    boundary: doc.boundary,
+    circulationPaths: doc.circulationPaths,
+    circulationMask: doc.circulationPaths.length ? buildCirculationMask(doc.circulationPaths) : null,
+    scribbles: doc.scribbles,
+  }
+}
+
+/**
+ * Restore a history entry. When the entry's active board is still the current one,
+ * only its geometry is rolled back (layer/substrate state and the spatial index
+ * subscription behave exactly as the single-board app did). When the entry belongs
+ * to a DIFFERENT board (e.g. undoing a board creation after switching into it), the
+ * whole board is loaded. The canvas list + other boards' docs are always restored,
+ * which is what makes board creation/removal undoable.
+ */
+function restoreEntry(state: DrawingState, entry: HistoryEntry): Partial<DrawingState> {
+  const sameBoard = entry.activeCanvasId === state.activeCanvasId
+  const docPart = sameBoard ? restoreActiveGeometry(entry.activeDoc) : applyCanvasDoc(entry.activeDoc)
+  return {
+    ...docPart,
+    activeCanvasId: entry.activeCanvasId,
+    canvases: entry.canvases,
+    inactiveCanvasDocs: entry.inactiveCanvasDocs,
   }
 }
 
 // Assemble the non-graph polylines (lot boundary ring + circulation centerlines)
 // that should also be snap-able, so the Polyline tool can share their vertices and
 // start/end on their edges — same context-aware snapping the boundary trace uses.
-function snapExtras(state: DrawingState): ExtraPolyline[] {
+function snapExtras(state: {
+  boundary: Boundary | null
+  circulationPaths: CirculationPath[]
+}): ExtraPolyline[] {
   const extras: ExtraPolyline[] = []
   if (state.boundary && state.boundary.ring.length >= 2) {
     extras.push({ id: 'bnd', points: state.boundary.ring, closed: state.boundary.isClosed !== false })
@@ -935,6 +1099,246 @@ function snapExtras(state: DrawingState): ExtraPolyline[] {
     if (p.centerline.length >= 2) extras.push({ id: `circ:${p.id}`, points: p.centerline, closed: false })
   }
   return extras
+}
+
+/** True when two polylines have identical points (within a small epsilon). */
+function samePolyline(a: { x: number; y: number }[], b: { x: number; y: number }[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (Math.abs(a[i].x - b[i].x) > 1e-6 || Math.abs(a[i].y - b[i].y) > 1e-6) return false
+  }
+  return true
+}
+
+/**
+ * Clip every circulation centerline to the (closed) lot boundary, keeping only the
+ * parts inside it — a path that pokes out is split/shortened, one fully outside is
+ * dropped. Returns the new paths + mask, or null when nothing changed (or there's
+ * no closed boundary / no paths, so there's nothing to trim).
+ */
+function trimCirculationToBoundary(
+  state: DrawingState,
+): { circulationPaths: CirculationPath[]; circulationMask: { x: number; y: number }[][] | null } | null {
+  const ring = state.boundary && state.boundary.isClosed !== false ? state.boundary.ring : null
+  if (!ring || ring.length < 3 || state.circulationPaths.length === 0) return null
+  const out: CirculationPath[] = []
+  let changed = false
+  for (const p of state.circulationPaths) {
+    const pieces = clipPolylineToPolygon(p.centerline, ring).filter((pts) => pts.length >= 2)
+    if (pieces.length === 1 && samePolyline(pieces[0], p.centerline)) {
+      out.push(p) // wholly inside, untouched
+      continue
+    }
+    changed = true
+    for (const pts of pieces) {
+      out.push({
+        id: `circ-${Date.now()}-${circulationCounter++}`,
+        centerline: pts.map((pt) => ({ x: pt.x, y: pt.y })),
+        width: p.width,
+      })
+    }
+  }
+  if (!changed) return null
+  return { circulationPaths: out, circulationMask: out.length ? buildCirculationMask(out) : null }
+}
+
+// ─── Multi-canvas (design-option branches) helpers ───────────────────────────
+
+/** A pristine, empty document for a freshly spawned neighbor canvas — starts at the
+ *  Context layer with no substrate chosen, exactly like a freshly loaded page. */
+function blankCanvasDoc(pageWidth: number, pageHeight: number, sheetName: string): CanvasDoc {
+  return {
+    graph: emptyGraph(),
+    lockPolygons: [],
+    intentPins: [],
+    textLabels: [],
+    scribbles: [],
+    boundary: null,
+    circulationPaths: [],
+    underlay: null,
+    pageWidth,
+    pageHeight,
+    sheetName,
+    activeLayer: 'CONTEXT',
+    maxLayerReached: 0,
+    context: null,
+    gridType: 'none',
+    gridSpacing: 32,
+    boundaryInfillOpacity: 0.15,
+    circulationWidth: 12,
+    metersPerWorldUnit: null,
+    mapActive: false,
+    mapDim: 0.35,
+    mapGeometry: null,
+  }
+}
+
+/**
+ * Deep-clone a document and translate every absolute-world-coordinate field by
+ * (dx, dy). Used by `addCanvas('copy')` so a branched board's geometry lands in the
+ * new board's slot instead of on top of the original. The underlay is NOT shifted —
+ * its transform is local to the page center (rendered inside the board's offset
+ * group) — and mapGeometry is geographic (lng/lat), so both are copied verbatim.
+ */
+function translateCanvasDoc(doc: CanvasDoc, dx: number, dy: number): CanvasDoc {
+  const vertices: Record<string, { id: string; x: number; y: number }> = {}
+  for (const id in doc.graph.vertices) {
+    const v = doc.graph.vertices[id]
+    vertices[id] = { ...v, x: v.x + dx, y: v.y + dy }
+  }
+  const strokes = doc.graph.strokes.map((s) => ({
+    ...s,
+    path: s.path.map((pp) => ({ ...pp })),
+    raw: s.raw ? s.raw.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy })) : s.raw,
+  }))
+  const shift = (p: { x: number; y: number }) => ({ x: p.x + dx, y: p.y + dy })
+  return {
+    ...doc,
+    graph: { vertices, strokes },
+    boundary: doc.boundary ? { ...doc.boundary, ring: doc.boundary.ring.map(shift) } : null,
+    circulationPaths: doc.circulationPaths.map((c) => ({ ...c, centerline: c.centerline.map(shift) })),
+    lockPolygons: doc.lockPolygons.map((l) => ({ ...l, points: l.points.map(shift) })),
+    intentPins: doc.intentPins.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })),
+    textLabels: doc.textLabels.map((t) => ({ ...t, x: t.x + dx, y: t.y + dy })),
+    scribbles: doc.scribbles.map((sc) => ({ ...sc, points: sc.points.map(shift) })),
+  }
+}
+
+/** Pull the live (active-canvas) document out of the store state into a snapshot. */
+function captureCanvasDoc(state: DrawingState): CanvasDoc {
+  return {
+    graph: state.graph,
+    lockPolygons: state.lockPolygons,
+    intentPins: state.intentPins,
+    textLabels: state.textLabels,
+    scribbles: state.scribbles,
+    boundary: state.boundary,
+    circulationPaths: state.circulationPaths,
+    underlay: state.underlay,
+    pageWidth: state.pageWidth,
+    pageHeight: state.pageHeight,
+    sheetName: state.sheetName,
+    activeLayer: state.activeLayer,
+    maxLayerReached: state.maxLayerReached,
+    context: state.context,
+    gridType: state.gridType,
+    gridSpacing: state.gridSpacing,
+    boundaryInfillOpacity: state.boundaryInfillOpacity,
+    circulationWidth: state.circulationWidth,
+    metersPerWorldUnit: state.metersPerWorldUnit,
+    mapActive: state.mapActive,
+    mapDim: state.mapDim,
+    mapGeometry: state.mapGeometry,
+  }
+}
+
+/** Load a document into the live top-level fields (rebuilding derived caches). */
+function applyCanvasDoc(doc: CanvasDoc): Partial<DrawingState> {
+  return {
+    graph: doc.graph,
+    spatialIndex: buildSnapIndex(doc.graph, snapExtras(doc)),
+    lockPolygons: doc.lockPolygons,
+    intentPins: doc.intentPins,
+    textLabels: doc.textLabels,
+    scribbles: doc.scribbles,
+    boundary: doc.boundary,
+    circulationPaths: doc.circulationPaths,
+    circulationMask: doc.circulationPaths.length ? buildCirculationMask(doc.circulationPaths) : null,
+    underlay: doc.underlay,
+    pageWidth: doc.pageWidth,
+    pageHeight: doc.pageHeight,
+    sheetName: doc.sheetName,
+    // Per-board layer pipeline memory.
+    activeLayer: doc.activeLayer,
+    maxLayerReached: doc.maxLayerReached,
+    context: doc.context,
+    gridType: doc.gridType,
+    gridSpacing: doc.gridSpacing,
+    boundaryInfillOpacity: doc.boundaryInfillOpacity,
+    circulationWidth: doc.circulationWidth,
+    metersPerWorldUnit: doc.metersPerWorldUnit,
+    mapActive: doc.mapActive,
+    mapDim: doc.mapDim,
+    mapGeometry: doc.mapGeometry,
+    // Transient interaction state never carries across a canvas switch.
+    selectedStrokeIds: [],
+    pendingPin: null,
+    pendingText: null,
+    liveScribble: null,
+    activeSnapGuide: null,
+    trackedPoints: [],
+  }
+}
+
+/** The page rectangle (center + size, world units) of any canvas. */
+export function canvasRect(
+  state: DrawingState,
+  id: string,
+): { cx: number; cy: number; w: number; h: number } | null {
+  const entry = state.canvases.find((c) => c.id === id)
+  if (!entry) return null
+  if (id === state.activeCanvasId) {
+    return { cx: entry.origin.x, cy: entry.origin.y, w: state.pageWidth, h: state.pageHeight }
+  }
+  const doc = state.inactiveCanvasDocs[id]
+  if (!doc) return null
+  return { cx: entry.origin.x, cy: entry.origin.y, w: doc.pageWidth, h: doc.pageHeight }
+}
+
+/** World-space origin of the active board (center of its page). Central = (0,0). */
+export function activeOrigin(state: DrawingState): { x: number; y: number } {
+  return state.canvases.find((c) => c.id === state.activeCanvasId)?.origin ?? { x: 0, y: 0 }
+}
+
+/** Id of the canvas whose page rectangle contains the world point, or null. */
+export function canvasAt(state: DrawingState, x: number, y: number): string | null {
+  for (const entry of state.canvases) {
+    const r = canvasRect(state, entry.id)
+    if (!r) continue
+    if (Math.abs(x - r.cx) <= r.w / 2 && Math.abs(y - r.cy) <= r.h / 2) return entry.id
+  }
+  return null
+}
+
+/**
+ * The origin for a new canvas placed one slot from `from` in `direction`, pushed
+ * further out along that axis until its (gutter-padded) page rectangle clears every
+ * existing canvas — so spawning repeatedly in one direction lines them up in a row.
+ */
+function freeOriginInDirection(
+  state: DrawingState,
+  from: { x: number; y: number },
+  direction: CardinalDirection,
+  w: number,
+  h: number,
+): { x: number; y: number } {
+  const ux = direction === 'E' ? 1 : direction === 'W' ? -1 : 0
+  const uy = direction === 'N' ? 1 : direction === 'S' ? -1 : 0
+  // Center-to-center step for the first slot: half of each page + the gutter.
+  const baseStep = (ux !== 0 ? (state.pageWidth + w) / 2 : (state.pageHeight + h) / 2) + CANVAS_GAP
+  const stepInc = (ux !== 0 ? w : h) + CANVAS_GAP
+
+  const rects = state.canvases
+    .map((c) => canvasRect(state, c.id))
+    .filter((r): r is NonNullable<typeof r> => r != null)
+
+  const overlaps = (cx: number, cy: number): boolean =>
+    rects.some(
+      (r) =>
+        Math.abs(cx - r.cx) < (w + r.w) / 2 + CANVAS_GAP * 0.5 &&
+        Math.abs(cy - r.cy) < (h + r.h) / 2 + CANVAS_GAP * 0.5,
+    )
+
+  let step = baseStep
+  let cx = from.x + ux * step
+  let cy = from.y + uy * step
+  // Bounded search: never loop forever even with a pathological layout.
+  for (let i = 0; i < 64 && overlaps(cx, cy); i++) {
+    step += stepInc
+    cx = from.x + ux * step
+    cy = from.y + uy * step
+  }
+  return { x: cx, y: cy }
 }
 
 // Keep the spatial snap index in lockstep with the graph AND the boundary /

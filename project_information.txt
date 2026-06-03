@@ -1,14 +1,15 @@
-BLOOM — Project Information Document
+GRADIA DRAW — Project Information Document
 ================================================================================
 Purpose: Onboarding reference for collaborators and LLM coding agents. Describes
 the project's intent, technical architecture, and complete current feature set.
-Last updated: 2026-06-02 (snapping Clusters 1–4 + O-TRACK; renamed to "Bloom")
+Last updated: 2026-06-03 (multi-board design options; per-tool contextual bar;
+              ribbon Color/Pen removed; per-board layer memory + global undo)
 ================================================================================
  
 
 WHAT THIS PROJECT IS
 --------------------
-Bloom is a web-based sketch-to-plan ideation tool for architects and
+Gradia Draw is a web-based sketch-to-plan ideation tool for architects and
 urban designers. It is NOT a diffusion-based image renderer. It is a precision
 vector drawing environment where the designer retains fine-grained authorial
 control over every line segment, and an LLM is used as a downstream co-resolver —
@@ -64,15 +65,27 @@ All geometry is a Planar Straight-Line Graph (PSLG). Renders are a derived cache
   TextLabel    { id, x, y, text, color, size }        free-floating annotation
   Underlay     { src, opacity, pixelWidth, pixelHeight,
                  x, y, width, height }                raster import with own transform
-  Snapshot     { graph, lockPolygons, intentPins,
-                 textLabels }                         undo/redo unit
+  CanvasEntry  { id, origin: {x,y} }                  a board's identity + world offset
+  CanvasDoc    { graph, lockPolygons, intentPins,     ONE board's full document:
+                 textLabels, scribbles, boundary,      geometry + per-board layer
+                 circulationPaths, underlay,           pipeline state (activeLayer,
+                 pageWidth, pageHeight, sheetName,      maxLayerReached, context, grid,
+                 activeLayer, maxLayerReached,          infill/corridor settings, map
+                 context, gridType, gridSpacing, … }   state). Active board = live
+                                                       store fields; inactive boards
+                                                       held in inactiveCanvasDocs.
+  HistoryEntry { activeDoc: CanvasDoc, activeCanvasId, undo/redo unit — the WHOLE
+                 canvases, inactiveCanvasDocs }         multi-board world (global stack)
   SnapGuide    { type: 'endpoint'|'perpendicular'|    transient CAD snap guide
                  'parallel'|'extension'|'edge',        (polyline Smart Track);
                  fromPoint: [x,y], toPoint: [x,y],     lives in store.activeSnapGuide,
                  sourceEdgeId?, sourceVertexId? }      NOT part of undo history
 
-World coordinate system: origin (0,0) at page center, y-axis up, right-handed.
+World coordinate system: origin (0,0) at the CENTRAL board's page center, y-axis up,
+right-handed. Additional boards sit at world-space offsets; their geometry is stored
+in absolute world coords near their own origin (see MULTI-BOARD).
 Export flips y: fx(x) = x + W/2, fy(y) = H/2 - y (top-left origin, y down).
+(Export currently serializes only the ACTIVE board.)
 
 The page sheet is an INDEPENDENT world frame: its size (pageWidth/pageHeight,
 default 1080×720) is NEVER altered by imports. setPageSize() controls it
@@ -510,24 +523,65 @@ FEATURE INVENTORY
 
 CANVAS & NAVIGATION
 - R3F orthographic scene; light grey (#eef0f3) workspace backdrop, white page
-  sheet; page border line (#c0c6cf)
+  sheet; page border line (#c0c6cf; accent blue on the active board when >1 exists)
 - Pan: middle-click drag, Space+drag, Pan tool
 - Zoom: scroll wheel, cursor-anchored, MIN 0.2× MAX 20×
-- Undo/Redo: Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z or Y (snapshots full state)
+- Undo/Redo: Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z or Y. ONE GLOBAL timeline across all
+  boards: each HistoryEntry snapshots the whole world (active board's full doc +
+  activeCanvasId + canvases + the other boards' docs), so board creation is undoable
+  and an edit rolls back on the board it happened on. See MULTI-BOARD below.
 - ESC clears active selection
 
+MULTI-BOARD (DESIGN-OPTION CANVASES / "branches")
+- The workspace holds multiple boards laid out spatially as neighboring design
+  options, not isolated files. Each board is a self-contained CanvasDoc living at a
+  world-space `origin` offset (see DATA MODEL); the CENTRAL board sits at (0,0), so
+  the single-board behavior is unchanged.
+- ACTIVE vs INACTIVE: the active board's document IS the live drawingStore fields
+  (every tool edits it directly); inactive boards are snapshots in
+  store.inactiveCanvasDocs, rendered READ-ONLY at their offsets by InactiveCanvases
+  (full fidelity: strokes, boundary fill+outline, circulation centerlines, intent
+  field + pin markers, locks, grid, underlay; text/scribbles via the shared DOM
+  overlays). Click any neighbor board to activate it (DrawingLayer pointer-down
+  intercept while a creation tool is live; the ghost sheet's onClick otherwise).
+- SPAWNING: hover just outside an edge midpoint of the active board (N/E/S/W) → a
+  "+" fades in (CanvasBranchControls). Clicking it opens a chooser:
+    • Duplicate board — clone the active board's full state (translateCanvasDoc
+      deep-copies and shifts all ABSOLUTE-coord geometry to the new slot).
+    • Blank board — a fresh board at the Context layer (choose a substrate again).
+  The neighbor spawns adjacent, gutter-spaced (CANVAS_GAP) so boards never touch;
+  spawning does NOT steal focus. Boards are named "Board 01", "Board 02", …
+- PER-BOARD LAYER MEMORY: each board carries its OWN pipeline state — activeLayer,
+  maxLayerReached, context (substrate), grid type/spacing, boundaryInfillOpacity,
+  circulationWidth, metersPerWorldUnit, map active/dim/geometry — plus all its
+  geometry. Switching boards swaps it all in/out; changing one board's layers never
+  affects another. The right panel shows the active board's name and only its layers.
+- Coordinate rule: all geometry is ABSOLUTE world coords (so it renders at the
+  board's location with no per-board transform); only page furniture (sheet/grid/
+  underlay) is drawn inside a `<group position={origin}>`. Page-confined tools
+  (Polyline/Scribble/Text) clamp to the page rect centered at activeOrigin(state).
+
 UI SHELL
-- Top menu bar: "Bloom" cursive wordmark brand + File / Document placeholders
-- Single-row compact tool rail (46px): [Import▼] | Draw Poly Pan Erase Text |
-  Marquee Lasso Edit Lock | Intent Pin | [Color▼] | — | Generate (disabled)
-  Replaces the old two-row Word/Revit ribbon (~106px); saves ~60px canvas height.
-  Import and Color open floating contextual panels; all other tools are direct.
+- Top menu bar: "Gradia Draw" brand lockup (gradient app mark + clean sans
+  wordmark; professional/corporate) + File / Document placeholders
+- Single-row compact tool rail (46px): Pan Scribble Text | Polyline Erase Edit |
+  Marquee Lasso Lock Intent Pin [Export▼]. Color & Pen (weight/style) options moved
+  OUT of the rail into the per-tool contextual bar (below). Export opens a floating
+  panel (SVG/PNG/PDF); every other button is a direct tool toggle. (Import substrate
+  + Generate live in the right-panel Layer Hierarchy, not the rail.)
+- CONTEXTUAL TASK BAR (Photoshop-style, ContextualBar): a compact floating row that
+  appears only for the Scribble and Text tools. Spawns bottom-center, draggable by a
+  left gripper (position persists across tool switches, clamped to the canvas).
+    • Scribble → stroke color (circular swatches + custom picker) + line-weight presets.
+    • Text     → stroke color + a PSEUDO size control (placeholder; real per-label
+      sizing still needs the Text tool reworked — TextLabel.size is fixed at 14).
+  To add a bar for another tool: add a `toolMode === 'X' && <Control/>` branch.
 - Full-viewport crosshair: 1px lines via rAF dirty-flag + translate3d (GPU-
   accelerated); hidden while map active; light-mode color rgba(80,90,105,0.28)
 
 SKETCH TOOLS
-- Draw: freehand, uniform width, RDP-simplified, centripetal Catmull-Rom ribbon,
-  round caps/joins
+- Scribble (DRAW): freehand, uniform width, RDP-simplified, centripetal Catmull-Rom
+  ribbon, round caps/joins; color + line-weight via the contextual bar
 - Polyline: click-to-place, straight quads, miter joins; Shift-ortho constraint;
   CAD object snaps with priority matrix Endpoint > Perpendicular > Parallel > Edge
   (snap > Shift-ortho); edge snap lands the cursor on any existing line, snapping
@@ -540,9 +594,22 @@ SKETCH TOOLS
 NORMALIZE TOOLS
 - Marquee Select: rectangle drag, selects by vertex inclusion
 - Lasso Select: freehand polygon selection, segments at boundary
-- Edit (Vector): drag vertices to reshape; drag text labels; snaps to nearby
-  vertices/midpoints while dragging (excludes self); hold Shift to lock the drag
-  to a horizontal/vertical axis from the grab origin
+- Edit (Vector): direct-selection editing of the LAYER-APPROPRIATE geometry on the
+  ACTIVE board (geometry.editTargets.getEditTargets picks the set): Lot Boundary
+  layer → boundary ring vertices; Circulation layer → centerline vertices; other
+  layers → planar-graph vertices. Shows the vertices + a blue edge wireframe, drag
+  to reshape, drag text labels too. ALL anchors snap to nearby geometry while
+  dragging (vertex/midpoint) so a boundary/circulation vertex can land exactly on
+  the lot boundary, another centerline, or a graph vertex — the dragged anchor is
+  excluded by its spatial-index id ('bnd:v<i>', 'circ:<pathId>:v<i>') so it can't
+  snap to itself; Shift-ortho applies when no target is in range. One undo step per
+  drag (beginHistory on grab). Live moves go through setVertexPositions /
+  setBoundaryPoint / setCirculationPoint (no per-move history).
+  AUTO-TRIM: leaving the Edit tool (setTool away from VECTOR) re-clips every
+  circulation centerline back inside the closed lot boundary (trimCirculationToBoundary
+  → clipPolylineToPolygon), so edits to a corridor OR to the boundary that pushed a
+  path outside are trimmed automatically — same clipping the Polyline tool applies on
+  commit. One undo step; no-op when nothing is outside.
 - Lock Region: rectangle drag places semi-transparent grey lock overlay
 
 PIN TOOLS
@@ -586,7 +653,11 @@ MAP / GEOSPATIAL
   every map move/zoom; published to store as metersPerWorldUnit; shown in HUD
   as "Scale · 1 unit ≈ X m/km"; cleared on map close
 - GeoJSON published to store.mapGeometry on draw events
-- VITE_MAPBOX_TOKEN from .env (never hardcoded; .env is git-ignored)
+- VITE_MAPBOX_TOKEN from .env (never hardcoded; .env is git-ignored; public pk.
+  token, scope/URL-restrict it in the Mapbox account before deploy)
+- Style is hardcoded to 'mapbox://styles/mapbox/streets-v12' (MapView.tsx). To drive
+  the look from Mapbox Studio, publish a custom style and swap that URL (a
+  VITE_MAPBOX_STYLE env var would make it configurable without code changes).
 
 
 PHASE 2 — LLM GENERATE (Deferred)

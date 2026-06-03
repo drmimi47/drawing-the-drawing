@@ -1,7 +1,7 @@
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useMemo, useRef } from 'react'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
-import { useDrawingStore } from '../../store/drawingStore'
+import { useDrawingStore, canvasAt } from '../../store/drawingStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { useScribble } from '../../hooks/useScribble'
 import { useEraser } from '../../hooks/useEraser'
@@ -11,9 +11,8 @@ import { useLockTool } from '../../hooks/useLockTool'
 import { useIntentPinTool } from '../../hooks/useIntentPinTool'
 import { usePolyline } from '../../hooks/usePolyline'
 import { useTextTool } from '../../hooks/useTextTool'
-import { resolveStrokePoints } from '../../geometry/graph'
-import type { Graph, LineStyle, SamplePoint, Stroke } from '../../types/geometry'
-import { buildStrokeGeometry } from './strokeGeometry'
+import { getEditTargets } from '../../geometry/editTargets'
+import { RibbonMesh, StrokeView, SELECTION_COLOR } from './StrokeView'
 import { MarchingAntsLine } from './MarchingAntsLine'
 import { LockFieldView } from './LockFieldView'
 import { IntentFieldView } from './IntentFieldView'
@@ -25,96 +24,53 @@ import { CirculationView } from './CirculationView'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
 
-const SELECTION_COLOR = '#2f6fed'
+/** Cosmetic anchor-point handles for the VECTOR edit tool (picking is on the plane). */
+const EDIT_Z = 9.5 // above strokes, boundary, and circulation bands
 
 /**
- * A ribbon for a centerline polyline (smoothed unless `straight`), honoring the
- * stroke's drafting line style. Width falls back to 2× the first half-width when
- * `strokeWidth` is absent (older strokes / live previews).
+ * Editable-anchor handles for the Edit (VECTOR) tool. Shows the vertices AND a blue
+ * wireframe of the edges for the geometry the active layer exposes (lot boundary
+ * ring, circulation centerlines, or the planar graph) — see getEditTargets. Drawn
+ * above everything (depthTest off) so the handles stay grabbable over corridor bands.
  */
-function RibbonMesh({
-  points,
-  color,
-  straight,
-  lineStyle,
-  strokeWidth,
-  onTop,
-}: {
-  points: SamplePoint[]
-  color: string
-  straight?: boolean
-  lineStyle?: LineStyle
-  strokeWidth?: number
-  /** Draw above the lot-boundary fill/outline (used for the live polyline preview). */
-  onTop?: boolean
-}) {
-  const width = strokeWidth ?? (points.length > 0 ? points[0].w * 2 : 2)
-  const geometry = useMemo(
-    () => buildStrokeGeometry(points, straight, lineStyle, width),
-    [points, straight, lineStyle, width],
-  )
+function EditHandles() {
+  const activeLayer = useDrawingStore((s) => s.activeLayer)
+  const graph = useDrawingStore((s) => s.graph)
+  const boundary = useDrawingStore((s) => s.boundary)
+  const circulationPaths = useDrawingStore((s) => s.circulationPaths)
 
-  // The BufferGeometry instance is reused as `geometry` data updates (live draw /
-  // polyline preview / vertex drag). Three.js caches the bounding sphere on first
-  // cull and never refreshes it, so a moving preview keeps a stale sphere and gets
-  // wrongly frustum-culled when zoomed in (small frustum). Recompute it on every
-  // geometry change so culling stays correct without disabling it scene-wide.
-  const geoRef = useRef<THREE.BufferGeometry>(null)
-  useLayoutEffect(() => {
-    const g = geoRef.current
-    if (g && geometry.positions) g.computeBoundingSphere()
-  }, [geometry])
-
-  if (!geometry.positions || !geometry.indices) return null
-
-  return (
-    <mesh raycast={() => null} renderOrder={onTop ? 26 : 1} position={[0, 0, onTop ? 9 : 0]}>
-      <bufferGeometry ref={geoRef}>
-        <bufferAttribute attach="attributes-position" args={[geometry.positions, 3]} />
-        <bufferAttribute attach="index" args={[geometry.indices, 1]} />
-      </bufferGeometry>
-      <meshBasicMaterial color={color} side={THREE.DoubleSide} toneMapped={false} depthTest={!onTop} transparent={onTop} />
-    </mesh>
-  )
-}
-
-/** Resolve a graph stroke to centerline points and render it (tinted when selected). */
-function StrokeView({ graph, stroke, selected }: { graph: Graph; stroke: Stroke; selected: boolean }) {
-  const points = useMemo(() => resolveStrokePoints(graph, stroke), [graph, stroke])
-  return (
-    <RibbonMesh
-      points={points}
-      color={selected ? SELECTION_COLOR : stroke.color}
-      straight={stroke.straight}
-      lineStyle={stroke.lineStyle}
-      strokeWidth={stroke.strokeWidth}
-    />
-  )
-}
-
-/** Cosmetic anchor-point handles for the VECTOR edit tool (picking is on the plane). */
-function VectorHandles({ graph }: { graph: Graph }) {
-  const positions = useMemo(() => {
-    const ids = Object.keys(graph.vertices)
-    const arr = new Float32Array(ids.length * 3)
-    ids.forEach((id, i) => {
-      const v = graph.vertices[id]
-      arr[i * 3] = v.x
-      arr[i * 3 + 1] = v.y
-      arr[i * 3 + 2] = 4
+  const { positions, edgePositions } = useMemo(() => {
+    const { points, edges } = getEditTargets(activeLayer, graph, boundary, circulationPaths)
+    const positions = new Float32Array(points.length * 3)
+    points.forEach((p, i) => {
+      positions[i * 3] = p.x
+      positions[i * 3 + 1] = p.y
+      positions[i * 3 + 2] = EDIT_Z
     })
-    return arr
-  }, [graph])
+    const edgePositions = new Float32Array(edges.length * 6)
+    edges.forEach((e, i) => edgePositions.set([e[0], e[1], EDIT_Z, e[2], e[3], EDIT_Z], i * 6))
+    return { positions, edgePositions }
+  }, [activeLayer, graph, boundary, circulationPaths])
 
   if (positions.length === 0) return null
 
   return (
-    <points raycast={() => null} renderOrder={25}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-      </bufferGeometry>
-      <pointsMaterial size={8} sizeAttenuation={false} color={SELECTION_COLOR} depthTest={false} />
-    </points>
+    <>
+      {edgePositions.length > 0 && (
+        <lineSegments raycast={() => null} renderOrder={39} frustumCulled={false}>
+          <bufferGeometry>
+            <bufferAttribute attach="attributes-position" args={[edgePositions, 3]} />
+          </bufferGeometry>
+          <lineBasicMaterial color={SELECTION_COLOR} depthTest={false} transparent toneMapped={false} />
+        </lineSegments>
+      )}
+      <points raycast={() => null} renderOrder={40} frustumCulled={false}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        </bufferGeometry>
+        <pointsMaterial size={8} sizeAttenuation={false} color={SELECTION_COLOR} depthTest={false} />
+      </points>
+    </>
   )
 }
 
@@ -221,11 +177,25 @@ export function DrawingLayer() {
                   ? textTool
                   : scribble
 
+  // Clicking inside a NEIGHBOR canvas activates it instead of editing the current
+  // one (the interaction plane covers the whole viewport, so neighbor page meshes
+  // can't receive the click directly while a creation tool is live). Empty gutter
+  // space and the active canvas itself fall through to the tool as usual.
+  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    const state = useDrawingStore.getState()
+    const hit = canvasAt(state, e.point.x, e.point.y)
+    if (hit && hit !== state.activeCanvasId) {
+      state.setActiveCanvas(hit)
+      return
+    }
+    handlers.onPointerDown(e)
+  }
+
   return (
     <>
       <InteractionPlane
         enabled={interactive}
-        onPointerDown={handlers.onPointerDown}
+        onPointerDown={handlePointerDown}
         onPointerMove={handlers.onPointerMove}
         onPointerUp={handlers.onPointerUp}
       />
@@ -250,7 +220,7 @@ export function DrawingLayer() {
       {lockTool.outline && lockTool.outline.points.length > 1 && (
         <MarchingAntsLine points={lockTool.outline.points} closed color="#e23b3b" />
       )}
-      {toolMode === 'VECTOR' && <VectorHandles graph={graph} />}
+      {toolMode === 'VECTOR' && <EditHandles />}
       {snapTarget && <SnapIndicator snap={snapTarget} />}
       {toolMode === 'POLYLINE' && <SnapGuideOverlay guide={activeSnapGuide} />}
       {toolMode === 'POLYLINE' && <TrackingOverlay />}

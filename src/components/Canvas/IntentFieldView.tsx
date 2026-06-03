@@ -35,7 +35,7 @@ function getCircleTexture(): THREE.CanvasTexture {
   return circleTexture
 }
 
-function PinMarkers({ pins, pending }: { pins: IntentPin[]; pending: PendingPin | null }) {
+export function PinMarkers({ pins, pending }: { pins: IntentPin[]; pending: PendingPin | null }) {
   const { positions, colors } = useMemo(() => {
     const all: { x: number; y: number; color: string }[] = pins.map((p) => ({
       x: p.x,

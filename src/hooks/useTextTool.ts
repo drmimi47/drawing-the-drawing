@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
 import type { OrthographicCamera } from 'three'
-import { useDrawingStore } from '../store/drawingStore'
+import { useDrawingStore, activeOrigin } from '../store/drawingStore'
 import { isInsidePage } from '../geometry/page'
 
 /** Click radius (screen px) for re-opening an existing label near its anchor. */
@@ -33,8 +33,8 @@ export function useTextTool() {
       if (hit) {
         store.beginText(hit.x, hit.y, e.nativeEvent.clientX, e.nativeEvent.clientY, hit.id, hit.text)
       } else {
-        // New text may only be placed on the artboard, never in the grey workspace.
-        if (!isInsidePage({ x: e.point.x, y: e.point.y }, store.pageWidth, store.pageHeight)) return
+        // New text may only be placed on the active board, never in the grey workspace.
+        if (!isInsidePage({ x: e.point.x, y: e.point.y }, store.pageWidth, store.pageHeight, activeOrigin(store))) return
         store.beginText(e.point.x, e.point.y, e.nativeEvent.clientX, e.nativeEvent.clientY, null, '')
       }
     },

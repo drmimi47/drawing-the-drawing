@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { ThreeEvent } from '@react-three/fiber'
-import { useDrawingStore } from '../store/drawingStore'
+import { useDrawingStore, activeOrigin } from '../store/drawingStore'
 import { clampToPage } from '../geometry/page'
 
 /**
@@ -77,8 +77,8 @@ export function useScribble() {
       if (ne.button !== 0) return
       ;(ne.target as Element | null)?.setPointerCapture?.(ne.pointerId)
       drawingRef.current = true
-      const { pageWidth, pageHeight } = useDrawingStore.getState()
-      const c = clampToPage({ x: e.point.x, y: e.point.y }, pageWidth, pageHeight)
+      const state = useDrawingStore.getState()
+      const c = clampToPage({ x: e.point.x, y: e.point.y }, state.pageWidth, state.pageHeight, activeOrigin(state))
       ptsRef.current = [c]
       lastRef.current = c
       publishLive()
@@ -89,8 +89,8 @@ export function useScribble() {
   const onPointerMove = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
       if (!drawingRef.current) return
-      const { pageWidth, pageHeight } = useDrawingStore.getState()
-      lastRef.current = clampToPage({ x: e.point.x, y: e.point.y }, pageWidth, pageHeight)
+      const state = useDrawingStore.getState()
+      lastRef.current = clampToPage({ x: e.point.x, y: e.point.y }, state.pageWidth, state.pageHeight, activeOrigin(state))
       schedule()
     },
     [schedule],

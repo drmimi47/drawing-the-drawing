@@ -18,6 +18,9 @@ export function SheetScale() {
   const mpu = useDrawingStore((s) => s.metersPerWorldUnit)
   const pageWidth = useDrawingStore((s) => s.pageWidth)
   const pageHeight = useDrawingStore((s) => s.pageHeight)
+  const canvases = useDrawingStore((s) => s.canvases)
+  const activeCanvasId = useDrawingStore((s) => s.activeCanvasId)
+  const origin = canvases.find((c) => c.id === activeCanvasId)?.origin ?? { x: 0, y: 0 }
   const viewport = useCanvasStore((s) => s.viewport)
 
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -40,10 +43,11 @@ export function SheetScale() {
   let left = 0
   let top = 0
   if (show) {
-    // Artboard bottom-LEFT corner in world space (page centered at origin). The box's
-    // left edge aligns to the sheet's left edge, just below the bottom edge.
-    left = ((-pageWidth / 2 - viewport.minX) / vw) * size.w
-    top = ((viewport.maxY - -pageHeight / 2) / vh) * size.h + GAP
+    // Artboard bottom-LEFT corner in world space (page centered at the active
+    // canvas's origin). The box's left edge aligns to the sheet's left edge, just
+    // below the bottom edge.
+    left = ((origin.x - pageWidth / 2 - viewport.minX) / vw) * size.w
+    top = ((viewport.maxY - (origin.y - pageHeight / 2)) / vh) * size.h + GAP
   }
 
   return (

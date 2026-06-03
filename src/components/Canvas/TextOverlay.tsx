@@ -16,8 +16,13 @@ import { useCanvasStore } from '../../store/canvasStore'
 export function TextOverlay() {
   const labels = useDrawingStore((s) => s.textLabels)
   const pending = useDrawingStore((s) => s.pendingText)
+  const inactiveCanvasDocs = useDrawingStore((s) => s.inactiveCanvasDocs)
   const viewport = useCanvasStore((s) => s.viewport)
   const editingId = pending?.id ?? null
+
+  // Labels belonging to the inactive design-option canvases (read-only; their
+  // coordinates are absolute world space, same as the active canvas's).
+  const ghostLabels = Object.values(inactiveCanvasDocs).flatMap((doc) => doc.textLabels)
 
   const ref = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
@@ -43,7 +48,7 @@ export function TextOverlay() {
   return (
     <div ref={ref} className="text-overlay" aria-hidden>
       {ok &&
-        labels.map((label) =>
+        [...ghostLabels, ...labels].map((label) =>
           label.id === editingId ? null : (
             <div
               key={label.id}

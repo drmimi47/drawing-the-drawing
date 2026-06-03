@@ -14,10 +14,8 @@ import {
   FileCode,
   Image as ImageIcon,
   FileText,
-  PenLine,
 } from 'lucide-react'
 import { useDrawingStore, type ToolMode, type PipelineLayer } from '../../store/drawingStore'
-import { LINEWEIGHTS, type LineStyle } from '../../types/geometry'
 import { exportSVG, exportPNG, exportPDF } from '../../io/exportDrawing'
 import './Ribbon.css'
 
@@ -28,7 +26,8 @@ import './Ribbon.css'
  * Tools are grouped by workflow stage with thin separators. Color/Pen/Export
  * open floating panels; every other button is a direct tool toggle.
  *
- * Layout: Pan Scribble Text | Polyline Erase Edit | Marquee Lasso Lock IntentPin [Color▼] [Pen▼] [Export▼]
+ * Layout: Pan Scribble Text | Polyline Erase Edit | Marquee Lasso Lock IntentPin [Export▼]
+ * Color & Pen options moved to the per-tool contextual bar (ContextualBar).
  * Generate lives in the right-panel layer hierarchy, not the rail.
  */
 
@@ -55,8 +54,6 @@ const REST_TOOLS: ToolDef[] = [
   { key: 'LASSO', label: 'Lasso', Icon: Lasso },
   { key: 'LASSO_LOCK', label: 'Lock', Icon: Lock },
 ]
-
-const PRESET_COLORS = ['#1a1a1a', '#e23b3b', '#2f6fed', '#1f9d55', '#e8852b']
 
 /**
  * Per-layer tool allowlist — which tool buttons are ENABLED in each pipeline
@@ -151,154 +148,6 @@ function ExportDropdown() {
   )
 }
 
-function ColorDropdown() {
-  const strokeColor = useDrawingStore((s) => s.strokeColor)
-  const setColor = useDrawingStore((s) => s.setColor)
-  const wrapRef = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
-
-  useEffect(() => {
-    const h = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [])
-
-  return (
-    <div ref={wrapRef} className="rail-dropdown-wrap">
-      <button
-        type="button"
-        className={`rail-btn${open ? ' is-active' : ''}`}
-        title="Stroke color"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span className="rail-color-dot" style={{ background: strokeColor }} />
-        <span className="rail-btn-label">Color</span>
-      </button>
-
-      {open && (
-        <div className="rail-float-panel">
-          <div className="rail-float-swatches">
-            {PRESET_COLORS.map((color) => (
-              <button
-                key={color}
-                type="button"
-                className={`rail-swatch${strokeColor === color ? ' is-active' : ''}`}
-                style={{ background: color }}
-                title={color}
-                aria-label={`Color ${color}`}
-                aria-pressed={strokeColor === color}
-                onClick={() => { setColor(color); setOpen(false) }}
-              />
-            ))}
-            <label className="rail-swatch rail-swatch-custom" title="Custom color">
-              <input
-                type="color"
-                value={strokeColor}
-                onChange={(e) => setColor(e.target.value)}
-                aria-label="Custom stroke color"
-              />
-            </label>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-const LINE_STYLES: { key: LineStyle; label: string; dasharray: string }[] = [
-  { key: 'solid', label: 'Solid', dasharray: '' },
-  { key: 'dashed', label: 'Dashed', dasharray: '7 4' },
-  { key: 'long-dash', label: 'Long dash', dasharray: '13 5' },
-  { key: 'dotted', label: 'Dotted', dasharray: '0.1 4' },
-]
-
-/** A small SVG preview of a line at a given weight + dash pattern. */
-function LinePreview({ width, dasharray }: { width: number; dasharray: string }) {
-  return (
-    <svg className="rail-line-preview" width="48" height="14" viewBox="0 0 48 14" aria-hidden>
-      <line
-        x1="2"
-        y1="7"
-        x2="46"
-        y2="7"
-        stroke="currentColor"
-        strokeWidth={Math.max(1, Math.min(width, 7))}
-        strokeLinecap="round"
-        strokeDasharray={dasharray || undefined}
-      />
-    </svg>
-  )
-}
-
-/** Pen attributes: lineweight presets + line styles (drafting hierarchy). */
-function PenDropdown() {
-  const baseWidth = useDrawingStore((s) => s.baseWidth)
-  const setBaseWidth = useDrawingStore((s) => s.setBaseWidth)
-  const lineStyle = useDrawingStore((s) => s.lineStyle)
-  const setLineStyle = useDrawingStore((s) => s.setLineStyle)
-  const wrapRef = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
-
-  useEffect(() => {
-    const h = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [])
-
-  const activeStyle = LINE_STYLES.find((s) => s.key === lineStyle) ?? LINE_STYLES[0]
-
-  return (
-    <div ref={wrapRef} className="rail-dropdown-wrap">
-      <button
-        type="button"
-        className={`rail-btn${open ? ' is-active' : ''}`}
-        title="Lineweight & style"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <PenLine size={16} strokeWidth={1.75} />
-        <span className="rail-btn-label">Pen</span>
-      </button>
-
-      {open && (
-        <div className="rail-float-panel">
-          <div className="rail-float-label">Lineweight</div>
-          {LINEWEIGHTS.map((lw) => (
-            <button
-              key={lw.label}
-              type="button"
-              className={`rail-float-item${baseWidth === lw.width ? ' is-active' : ''}`}
-              aria-pressed={baseWidth === lw.width}
-              onClick={() => setBaseWidth(lw.width)}
-            >
-              <LinePreview width={lw.width} dasharray={activeStyle.dasharray} />
-              {lw.label}
-            </button>
-          ))}
-
-          <div className="rail-float-divider" />
-          <div className="rail-float-label">Line style</div>
-          {LINE_STYLES.map((ls) => (
-            <button
-              key={ls.key}
-              type="button"
-              className={`rail-float-item${lineStyle === ls.key ? ' is-active' : ''}`}
-              aria-pressed={lineStyle === ls.key}
-              onClick={() => setLineStyle(ls.key)}
-            >
-              <LinePreview width={2} dasharray={ls.dasharray} />
-              {ls.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 export function Ribbon() {
   return (
     <div className="toolbar-rail">
@@ -310,8 +159,8 @@ export function Ribbon() {
       <div className="rail-sep" />
       {REST_TOOLS.map((t) => <ToolBtn key={t.key} tool={t} />)}
       <ToolBtn tool={{ key: 'INTENT_PIN', label: 'Intent Pin', Icon: MapPin }} />
-      <ColorDropdown />
-      <PenDropdown />
+      {/* Color & Pen options now live in the per-tool contextual bar (see
+          ContextualBar). Export sits directly after the Intent Pin button. */}
       <ExportDropdown />
     </div>
   )

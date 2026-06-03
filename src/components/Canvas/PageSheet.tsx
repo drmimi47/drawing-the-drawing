@@ -14,6 +14,10 @@ export function PageSheet() {
   const width = useDrawingStore((s) => s.pageWidth)
   const height = useDrawingStore((s) => s.pageHeight)
   const context = useDrawingStore((s) => s.context)
+  // When more than one design-option canvas exists, accent the ACTIVE sheet's border
+  // so the editable canvas reads as distinct from its read-only neighbors.
+  const multiCanvas = useDrawingStore((s) => s.canvases.length > 1)
+  const borderColor = multiCanvas ? '#2f6fed' : '#c0c6cf'
   // In MAP context the dimmed Mapbox underlay fills the artboard, so we skip the
   // opaque white fill (the transparent canvas lets the map show through). The page
   // border still draws as a frame.
@@ -47,7 +51,7 @@ export function PageSheet() {
         <bufferGeometry>
           <bufferAttribute attach="attributes-position" args={[border, 3]} />
         </bufferGeometry>
-        <lineBasicMaterial color="#c0c6cf" toneMapped={false} />
+        <lineBasicMaterial color={borderColor} toneMapped={false} />
       </lineLoop>
     </group>
   )

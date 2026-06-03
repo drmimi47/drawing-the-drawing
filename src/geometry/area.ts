@@ -1,5 +1,5 @@
 /**
- * Polygon area + real-world conversion (Bloom restructure — Stage 1).
+ * Polygon area + real-world conversion (Gradia Draw restructure — Stage 1).
  *
  * Areas are computed in WORLD units² via the shoelace formula, then converted to
  * real units using the live Mercator scale (metersPerWorldUnit) when a map is

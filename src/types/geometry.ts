@@ -151,7 +151,7 @@ export interface IntentPin {
 export const emptyGraph = (): Graph => ({ vertices: {}, strokes: [] })
 
 /**
- * Lot boundary (Bloom restructure — Stage 1). A first-class, closed ring that is
+ * Lot boundary (Gradia Draw restructure — Stage 1). A first-class, closed ring that is
  * the master working area ("a canvas within the canvas"). `targetSqf` drives the
  * advisory delta readout (never an auto-transform — Stage 1.3).
  */
@@ -168,7 +168,7 @@ export interface Boundary {
 }
 
 /**
- * A circulation (hallway) centerline (Bloom restructure — Stage 2). The open
+ * A circulation (hallway) centerline (Gradia Draw restructure — Stage 2). The open
  * polyline is offset to `width` (world units) into a corridor band; the union of
  * all bands forms the keep-out mask that repels department fields downstream.
  */
