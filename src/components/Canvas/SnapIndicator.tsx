@@ -42,7 +42,7 @@ export function SnapIndicator({ snap }: { snap: SnapPoint }) {
 
   return (
     <lineLoop ref={ref} geometry={geometry} renderOrder={40} frustumCulled={false}>
-      <lineBasicMaterial color={COLOR} depthTest={false} toneMapped={false} />
+      <lineBasicMaterial color={COLOR} depthTest={false} transparent toneMapped={false} />
     </lineLoop>
   )
 }

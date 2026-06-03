@@ -77,6 +77,14 @@ body {
   background: var(--bg);
 }
 
+/* ---- Lot-boundary reference overlay (Context layer, above the map) ---- */
+.boundary-context-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4; /* above the interactive map overlay (z-index 3) */
+  pointer-events: none;
+}
+
 /* ---- Top menu bar ---- */
 .menu-bar {
   z-index: 20;

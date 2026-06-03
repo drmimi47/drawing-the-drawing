@@ -33,27 +33,31 @@ import { clampToPage } from '../geometry/page'
  *                    (they need not actually meet); locks to it when the cursor is
  *                    within SNAP_THRESHOLD_PX of that virtual point. Emits an
  *                    'intersection' guide (green ✕).
- *   P4  Perpendicular — when a polyline session is active (≥1 vertex placed),
+ *   P4  Edge       — nearest point on a nearby committed edge span (lot boundary,
+ *                    other circulation centerlines, graph walls): share the line
+ *                    instead of near-missing it; emits an 'edge' guide (green ◇).
+ *                    Promoted above the construction snaps below so that, mid-draw,
+ *                    hovering directly over an existing line lands ON it rather than
+ *                    being pulled onto a parallel/perpendicular ray as you approach.
+ *   P5  Perpendicular — when a polyline session is active (≥1 vertex placed),
  *                    the segment P→cursor is perpendicular to a nearby edge;
  *                    cursor is locked to the foot of perpendicular on the line
  *                    through P that is ⊥ to that edge.
- *   P5  Parallel   — when a polyline session is active, the segment P→cursor
+ *   P6  Parallel   — when a polyline session is active, the segment P→cursor
  *                    is parallel (within PARALLEL_THRESHOLD_RAD) to a nearby
  *                    edge; cursor is projected onto the parallel ray from P.
- *   P6  Extension  — when ≥2 vertices are placed, the cursor floats near the
+ *   P7  Extension  — when ≥2 vertices are placed, the cursor floats near the
  *                    infinite line continuing the last segment; locks onto that
  *                    line so the next segment stays collinear. Emits an
  *                    'extension' guide (dashed track along the trajectory).
- *   P7  Tracking   — object-snap tracking (O-TRACK). Anchors are acquired by
+ *   P8  Tracking   — object-snap tracking (O-TRACK). Anchors are acquired by
  *                    hovering a vertex/midpoint ~400ms (store.trackedPoints, ≤2);
  *                    moving away projects H/V alignment rays from them, locking the
  *                    cursor's x to an anchor's x and/or its y to an anchor's y
  *                    (two anchors ⇒ lock to their intersection). Emits a 'tracking'
  *                    guide; the TrackingOverlay draws the ✛ anchors + alignment rays.
- *   P8  Edge       — nearest point on a nearby committed edge span (share a line
- *                    instead of near-missing it); emits an 'edge' guide (green ◇).
  *
- * P4/P5/P6 only fire when `pointsRef.current.length > 0` (P6 needs ≥2) — the
+ * P5/P6/P7 only fire when `pointsRef.current.length > 0` (P7 needs ≥2) — the
  * freehand DRAW tool has a completely separate code path and is unaffected.
  *
  * Every snap sets isAdvanced=true so Shift-ortho is suppressed while a snap is
@@ -207,7 +211,46 @@ function resolveSnap(
     }
   }
 
-  // ── Priorities 4–6: require an active polyline session ───────────────────
+  // ── Priority 4: ON-EDGE snap (cursor directly over a committed edge) ──────
+  // Promoted ABOVE the perp/parallel/extension construction snaps so that, mid-
+  // draw, the cursor reliably lands ON an existing line — the lot boundary or an
+  // already-drawn circulation centerline — when hovering over it, instead of being
+  // pulled onto a parallel/perpendicular ray as you approach it. A nearer vertex or
+  // midpoint (P1/P2) still pre-empts this. Tight band (snapRadiusW) so you only
+  // stick when genuinely on the line. Only COMMITTED edges are candidates (snapping
+  // onto the in-progress rubber band would fold the line back on itself), so this
+  // never fires for the very geometry you're drawing — only for sharing existing
+  // edges, which is exactly the context-aware behaviour wanted for circulation.
+  {
+    let bestEdgeDist = snapRadiusW
+    let bestEdgePos: { x: number; y: number } | null = null
+    let bestEdgeKey: string | null = null
+    for (const { key, a, b } of committed) {
+      const np = nearestPointOnSegment(raw, a, b)
+      if (np.dist < bestEdgeDist) {
+        bestEdgeDist = np.dist
+        bestEdgePos = { x: np.x, y: np.y }
+        bestEdgeKey = key
+      }
+    }
+    if (bestEdgePos) {
+      const from: [number, number] =
+        pts.length > 0 ? [pts[pts.length - 1].x, pts[pts.length - 1].y] : [bestEdgePos.x, bestEdgePos.y]
+      return {
+        pos: bestEdgePos,
+        snapTarget: null,
+        guide: {
+          type: 'edge',
+          fromPoint: from,
+          toPoint: [bestEdgePos.x, bestEdgePos.y],
+          sourceEdgeId: bestEdgeKey ?? undefined,
+        },
+        isAdvanced: true,
+      }
+    }
+  }
+
+  // ── Priorities 5–7: require an active polyline session ───────────────────
   if (pts.length > 0) {
     const P = pts[pts.length - 1]
     const perpThresh = (SNAP_THRESHOLD_PX * PERP_THRESHOLD_MULT) / zoom
@@ -221,7 +264,7 @@ function resolveSnap(
     }
     const candidates = [...committed, ...activeSegs]
 
-    // ── Priority 4: perpendicular snap ──────────────────────────────────
+    // ── Priority 5: perpendicular snap ──────────────────────────────────
     // Pick the candidate edge whose perp-line foot is closest to M.
     let bestPerpDist = perpThresh
     let bestPerpPos: { x: number; y: number } | null = null
@@ -251,7 +294,7 @@ function resolveSnap(
       }
     }
 
-    // ── Priority 5: parallel snap ────────────────────────────────────────
+    // ── Priority 6: parallel snap ────────────────────────────────────────
     // Pre-compute normalized P→M direction once; skip if cursor == P.
     const vx = raw.x - P.x
     const vy = raw.y - P.y
@@ -293,7 +336,7 @@ function resolveSnap(
       }
     }
 
-    // ── Priority 6: extension snap (collinear continuation of last segment) ──
+    // ── Priority 7: extension snap (collinear continuation of last segment) ──
     // With ≥2 points placed, project the cursor onto the INFINITE line through
     // the last segment (P_prev → P). If it floats within the tight snapRadiusW of
     // that line, lock it on — so the next segment can continue exactly collinear
@@ -316,12 +359,12 @@ function resolveSnap(
     }
   }
 
-  // ── Priority 7: object-snap tracking (O-TRACK) ──────────────────────────
+  // ── Priority 8: object-snap tracking (O-TRACK) ──────────────────────────
   // Acquired anchors (store.trackedPoints, ≤2) project axis-alignment rays. Lock
   // the cursor's x to the nearest anchor x within snapRadiusW and/or its y to the
   // nearest anchor y — so two anchors snap the cursor to their (T1.x, T2.y)
   // intersection. Lower than the object snaps above (it aligns to remembered
-  // points, not to geometry directly under the cursor), higher than raw edge snap.
+  // points, not to geometry directly under the cursor); the last tier before raw.
   if (trackedPoints.length > 0) {
     let bestVx: number | null = null
     let bestVxDist = snapRadiusW
@@ -347,47 +390,6 @@ function resolveSnap(
         // toPoint = locked cursor; TrackingOverlay derives the alignment rays by
         // matching each anchor's x/y against it, so a single guide covers both lines.
         guide: { type: 'tracking', fromPoint: [snapped.x, snapped.y], toPoint: [snapped.x, snapped.y] },
-        isAdvanced: true,
-      }
-    }
-  }
-
-  // ── Priority 8: edge snap (nearest point on a nearby committed edge) ──────
-  // Always active (no session required) so a polyline can start or continue
-  // EXACTLY on an existing line — sharing it instead of near-missing it. Only
-  // committed edges are candidates (snapping onto the in-progress rubber band
-  // would fold the line back on itself). Endpoint snap (P1) already won if a
-  // vertex was closer, so this lands you on the span between vertices.
-  //
-  // The hot zone is kept at exactly snapRadiusW (the endpoint radius, ~8px): now
-  // that edges are detected along their full length, a wider band would feel
-  // "magnetized" when floating parallel-adjacent to a long wall. Tight band =
-  // you only stick when genuinely on the line, and a nearer vertex/midpoint
-  // (P1) always pre-empts it.
-  {
-    let bestEdgeDist = snapRadiusW
-    let bestEdgePos: { x: number; y: number } | null = null
-    let bestEdgeKey: string | null = null
-    for (const { key, a, b } of committed) {
-      const np = nearestPointOnSegment(raw, a, b)
-      if (np.dist < bestEdgeDist) {
-        bestEdgeDist = np.dist
-        bestEdgePos = { x: np.x, y: np.y }
-        bestEdgeKey = key
-      }
-    }
-    if (bestEdgePos) {
-      const from: [number, number] =
-        pts.length > 0 ? [pts[pts.length - 1].x, pts[pts.length - 1].y] : [bestEdgePos.x, bestEdgePos.y]
-      return {
-        pos: bestEdgePos,
-        snapTarget: null,
-        guide: {
-          type: 'edge',
-          fromPoint: from,
-          toPoint: [bestEdgePos.x, bestEdgePos.y],
-          sourceEdgeId: bestEdgeKey ?? undefined,
-        },
         isAdvanced: true,
       }
     }
@@ -423,6 +425,9 @@ export function usePolyline() {
   // True once the active path's loop has been closed (last vertex placed back on
   // the first). Only a closed loop commits a lot boundary — an open path doesn't.
   const closedRef = useRef(false)
+  // Vertices popped by mid-draw Ctrl+Z, so Ctrl+Shift+Z / Ctrl+Y can re-add them.
+  // Cleared when a fresh vertex is placed (the redo chain is then broken).
+  const redoStackRef = useRef<{ x: number; y: number }[]>([])
 
   // O-TRACK acquisition: id of the committed anchor currently under the cursor,
   // and the pending acquire timer (fires after ACQUIRE_MS of stable hover).
@@ -460,6 +465,7 @@ export function usePolyline() {
     snapGuideRef.current = null
     isAdvancedSnapRef.current = false
     closedRef.current = false
+    redoStackRef.current = []
     useDrawingStore.getState().setSnapGuide(null)
     // O-TRACK anchors are per-path — drop them on completion / cancellation.
     clearAcquireTimer()
@@ -476,6 +482,34 @@ export function usePolyline() {
     if (layer === 'BOUNDARY') {
       const first = pts[0]
       const last = pts[pts.length - 1]
+
+      // REPAIR: if the boundary is currently OPEN (a segment was erased) and this
+      // path bridges its two free ends, splice the path in to re-close the lot —
+      // no need to redraw the whole boundary. The ends are snap-able, so the user
+      // just snaps the path's start to one free end and its end to the other.
+      const b = useDrawingStore.getState().boundary
+      if (b && b.isClosed === false && b.ring.length >= 2 && pts.length >= 2) {
+        const ringPts = b.ring
+        const A = ringPts[0]
+        const B = ringPts[ringPts.length - 1]
+        const near = (p: { x: number; y: number }, q: { x: number; y: number }) =>
+          Math.hypot(p.x - q.x, p.y - q.y) <= CLOSE_DIST
+        // Interior points of the drawn path (excluding its two endpoints, which
+        // coincide with the free ends), ordered so the closed ring reads A…B…→A.
+        const interior = pts.slice(1, -1).map((p) => ({ x: p.x, y: p.y }))
+        let merged: { x: number; y: number }[] | null = null
+        if (near(first, A) && near(last, B)) merged = [...ringPts, ...interior.reverse()]
+        else if (near(first, B) && near(last, A)) merged = [...ringPts, ...interior]
+        if (merged) {
+          useDrawingStore.getState().setBoundary(merged) // commits closed (isClosed: true)
+          reset()
+          return
+        }
+      }
+
+      // Otherwise: only a *closed* loop commits a fresh boundary (replacing any
+      // existing one). An open path is left in progress so the user can close it —
+      // Enter/Space on a path whose endpoints already coincide counts as closing.
       const endpointsMeet =
         pts.length >= 3 && Math.hypot(last.x - first.x, last.y - first.y) <= CLOSE_DIST
       if (closedRef.current || endpointsMeet) {
@@ -507,15 +541,49 @@ export function usePolyline() {
   const cancel = useCallback(() => reset(), [reset])
 
   // Key handling: Shift state (preview reacts immediately on hold/release without
-  // needing a pointer move) and Enter/Esc control flow.
+  // needing a pointer move) and Space/Enter/Esc/Ctrl+Z control flow. Space ends the
+  // line (replacing double-click); it only does so while a path is in progress, so
+  // it still works as the hold-to-pan modifier when no polyline is being drawn.
+  //
+  // Registered on the CAPTURE phase so that, mid-draw, Ctrl+Z pops the last vertex
+  // (and Ctrl+Shift+Z / Ctrl+Y re-adds it) and stops the event before the app-level
+  // document undo/redo (bubble phase) can fire.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Shift') {
         setIsShiftPressed(true)
         return
       }
+
+      // Mid-draw vertex undo/redo. Handled above the "no active path" guard so the
+      // redo still works after popping every vertex. Only consumed (stopping the
+      // global undo/redo) when there's actually a vertex to pop or re-add — so when
+      // no polyline is in progress these fall through to the document history.
+      const mod = e.ctrlKey || e.metaKey
+      const lkey = e.key.toLowerCase()
+      const isUndo = mod && lkey === 'z' && !e.shiftKey
+      const isRedo = mod && ((lkey === 'z' && e.shiftKey) || lkey === 'y')
+      if (isUndo && pointsRef.current.length > 0) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        const popped = pointsRef.current[pointsRef.current.length - 1]
+        redoStackRef.current.push({ x: popped.x, y: popped.y })
+        pointsRef.current = pointsRef.current.slice(0, -1)
+        setPoints(pointsRef.current)
+        closedRef.current = false
+        return
+      }
+      if (isRedo && redoStackRef.current.length > 0) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        pointsRef.current = [...pointsRef.current, redoStackRef.current.pop()!]
+        setPoints(pointsRef.current)
+        return
+      }
+
       if (pointsRef.current.length === 0) return
-      if (e.key === 'Enter') {
+      if (e.code === 'Space' || e.key === 'Enter') {
+        if (e.repeat) return // ignore auto-repeat while the key is held
         e.preventDefault()
         finish()
       } else if (e.key === 'Escape') {
@@ -526,10 +594,10 @@ export function usePolyline() {
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Shift') setIsShiftPressed(false)
     }
-    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('keyup', onKeyUp)
     return () => {
-      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('keyup', onKeyUp)
     }
   }, [finish, cancel])
@@ -565,6 +633,7 @@ export function usePolyline() {
         return
       }
       pointsRef.current = [...pts, p]
+      redoStackRef.current = [] // a freshly placed vertex breaks the redo chain
       setPoints(pointsRef.current)
     },
     [finish, camera],
@@ -622,7 +691,6 @@ export function usePolyline() {
   )
 
   const onPointerUp = useCallback(() => {}, [])
-  const onDoubleClick = useCallback(() => finish(), [finish])
 
   // Live preview = committed vertices + rubber-band to effective cursor.
   // effCursor priority: endpoint snap > advanced snap (already in cursor) > shift-ortho > raw.
@@ -638,5 +706,5 @@ export function usePolyline() {
   const rawPts = effCursor && points.length > 0 ? [...points, effCursor] : points
   const preview: SamplePoint[] = rawPts.map((p) => ({ x: p.x, y: p.y, w: half }))
 
-  return { onPointerDown, onPointerMove, onPointerUp, onDoubleClick, preview, snap }
+  return { onPointerDown, onPointerMove, onPointerUp, preview, snap }
 }

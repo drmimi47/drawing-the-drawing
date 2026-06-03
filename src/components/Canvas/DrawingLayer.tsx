@@ -39,12 +39,15 @@ function RibbonMesh({
   straight,
   lineStyle,
   strokeWidth,
+  onTop,
 }: {
   points: SamplePoint[]
   color: string
   straight?: boolean
   lineStyle?: LineStyle
   strokeWidth?: number
+  /** Draw above the lot-boundary fill/outline (used for the live polyline preview). */
+  onTop?: boolean
 }) {
   const width = strokeWidth ?? (points.length > 0 ? points[0].w * 2 : 2)
   const geometry = useMemo(
@@ -66,12 +69,12 @@ function RibbonMesh({
   if (!geometry.positions || !geometry.indices) return null
 
   return (
-    <mesh raycast={() => null} renderOrder={1}>
+    <mesh raycast={() => null} renderOrder={onTop ? 26 : 1} position={[0, 0, onTop ? 9 : 0]}>
       <bufferGeometry ref={geoRef}>
         <bufferAttribute attach="attributes-position" args={[geometry.positions, 3]} />
         <bufferAttribute attach="index" args={[geometry.indices, 1]} />
       </bufferGeometry>
-      <meshBasicMaterial color={color} side={THREE.DoubleSide} toneMapped={false} />
+      <meshBasicMaterial color={color} side={THREE.DoubleSide} toneMapped={false} depthTest={!onTop} transparent={onTop} />
     </mesh>
   )
 }
@@ -226,7 +229,6 @@ export function DrawingLayer() {
         onPointerDown={handlers.onPointerDown}
         onPointerMove={handlers.onPointerMove}
         onPointerUp={handlers.onPointerUp}
-        onDoubleClick={toolMode === 'POLYLINE' ? polyline.onDoubleClick : undefined}
       />
       <LockFieldView locks={lockPolygons} />
       <IntentFieldView pins={intentPins} pending={pendingPin} />
@@ -241,7 +243,7 @@ export function DrawingLayer() {
         <RibbonMesh points={draw.live} color={draw.liveColor} lineStyle={lineStyle} strokeWidth={baseWidth} />
       )}
       {toolMode === 'POLYLINE' && polyline.preview.length >= 2 && (
-        <RibbonMesh points={polyline.preview} color={strokeColor} straight lineStyle={lineStyle} strokeWidth={baseWidth} />
+        <RibbonMesh points={polyline.preview} color={strokeColor} straight lineStyle={lineStyle} strokeWidth={baseWidth} onTop />
       )}
       {selection.outline && (
         <MarchingAntsLine points={selection.outline.points} closed={selection.outline.closed} />

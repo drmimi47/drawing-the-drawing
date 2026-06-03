@@ -16,7 +16,7 @@ import {
   FileText,
   PenLine,
 } from 'lucide-react'
-import { useDrawingStore, type ToolMode } from '../../store/drawingStore'
+import { useDrawingStore, type ToolMode, type PipelineLayer } from '../../store/drawingStore'
 import { LINEWEIGHTS, type LineStyle } from '../../types/geometry'
 import { exportSVG, exportPNG, exportPDF } from '../../io/exportDrawing'
 import './Ribbon.css'
@@ -28,9 +28,8 @@ import './Ribbon.css'
  * Tools are grouped by workflow stage with thin separators. Color/Pen/Export
  * open floating panels; every other button is a direct tool toggle.
  *
- * Layout: Pan | Scribble Polyline Erase Edit | Text Marquee Lasso Lock | IntentPin | [Color▼] [Pen▼] [Export▼]
- * (In the Lot Boundary layer the primary group leads with Polyline.) Generate
- * lives in the right-panel layer hierarchy, not the rail.
+ * Layout: Pan Scribble Text | Polyline Erase Edit | Marquee Lasso Lock IntentPin [Color▼] [Pen▼] [Export▼]
+ * Generate lives in the right-panel layer hierarchy, not the rail.
  */
 
 interface ToolDef {
@@ -39,22 +38,19 @@ interface ToolDef {
   Icon: typeof Pencil
 }
 
-/** First group: navigation. */
 const PAN_TOOL: ToolDef = { key: 'PAN', label: 'Pan', Icon: Hand }
-
-/** Second group: the primary draw/edit tools. */
 const SCRIBBLE_TOOL: ToolDef = { key: 'DRAW', label: 'Scribble', Icon: Pencil }
+const TEXT_TOOL: ToolDef = { key: 'TEXT', label: 'Text', Icon: Type }
 const POLYLINE_TOOL: ToolDef = { key: 'POLYLINE', label: 'Polyline', Icon: Spline }
 const ERASE_TOOL: ToolDef = { key: 'ERASE', label: 'Erase', Icon: Eraser }
 const EDIT_TOOL: ToolDef = { key: 'VECTOR', label: 'Edit', Icon: MousePointer2 }
 
-const PRIMARY_DEFAULT: ToolDef[] = [SCRIBBLE_TOOL, POLYLINE_TOOL, ERASE_TOOL, EDIT_TOOL]
-/** In the Lot Boundary layer, Polyline leads (it's the boundary-tracing tool). */
-const PRIMARY_BOUNDARY: ToolDef[] = [POLYLINE_TOOL, SCRIBBLE_TOOL, ERASE_TOOL, EDIT_TOOL]
-
-/** Third group: the rest, in their existing order. */
+/** Group 1: navigation + freehand + text. */
+const GROUP_NAV: ToolDef[] = [PAN_TOOL, SCRIBBLE_TOOL, TEXT_TOOL]
+/** Group 2: structured draw / edit tools. */
+const GROUP_DRAW: ToolDef[] = [POLYLINE_TOOL, ERASE_TOOL, EDIT_TOOL]
+/** The rest, flowing together with no further separators. */
 const REST_TOOLS: ToolDef[] = [
-  { key: 'TEXT', label: 'Text', Icon: Type },
   { key: 'SELECT', label: 'Marquee', Icon: BoxSelect },
   { key: 'LASSO', label: 'Lasso', Icon: Lasso },
   { key: 'LASSO_LOCK', label: 'Lock', Icon: Lock },
@@ -62,8 +58,20 @@ const REST_TOOLS: ToolDef[] = [
 
 const PRESET_COLORS = ['#1a1a1a', '#e23b3b', '#2f6fed', '#1f9d55', '#e8852b']
 
-/** Creation/edit tools disabled in the Context layer (map setup only). */
-const CONTEXT_DISABLED = new Set<ToolMode>(['DRAW', 'POLYLINE', 'ERASE', 'TEXT'])
+/**
+ * Per-layer tool allowlist — which tool buttons are ENABLED in each pipeline
+ * layer (the rule follows the active layer, so it applies even when stepping
+ * backwards). A layer absent from this map enables every tool. Until the later
+ * stages are specified they fall through to "all enabled".
+ *   • Context     → Pan only (map setup).
+ *   • Lot Boundary / Circulation → Pan, Scribble, Text, Polyline, Erase, Edit.
+ */
+const DRAW_TOOLS: ToolMode[] = ['PAN', 'DRAW', 'TEXT', 'POLYLINE', 'ERASE', 'VECTOR']
+const LAYER_ENABLED_TOOLS: Partial<Record<PipelineLayer, Set<ToolMode>>> = {
+  CONTEXT: new Set<ToolMode>(['PAN']),
+  BOUNDARY: new Set<ToolMode>(DRAW_TOOLS),
+  CIRCULATION: new Set<ToolMode>(DRAW_TOOLS),
+}
 
 function ToolBtn({ tool }: { tool: ToolDef }) {
   const toolMode = useDrawingStore((s) => s.toolMode)
@@ -73,7 +81,8 @@ function ToolBtn({ tool }: { tool: ToolDef }) {
   const setShowIntentGrid = useDrawingStore((s) => s.setShowIntentGrid)
   const { key, label, Icon } = tool
   const active = toolMode === key
-  const disabled = activeLayer === 'CONTEXT' && CONTEXT_DISABLED.has(key)
+  const allowed = LAYER_ENABLED_TOOLS[activeLayer]
+  const disabled = allowed != null && !allowed.has(key)
   // Hovering Intent Pin previews the pin labels AND the region concentration grid.
   const hoverIntent = (show: boolean) => {
     setShowIntentLabels(show)
@@ -85,7 +94,7 @@ function ToolBtn({ tool }: { tool: ToolDef }) {
       className={`rail-btn${active ? ' is-active' : ''}`}
       aria-pressed={active}
       disabled={disabled}
-      title={disabled ? `${label} — available after the Context layer` : label}
+      title={disabled ? `${label} — not available in this layer` : label}
       onClick={() => setTool(key)}
       onMouseEnter={key === 'INTENT_PIN' && !disabled ? () => hoverIntent(true) : undefined}
       onMouseLeave={key === 'INTENT_PIN' && !disabled ? () => hoverIntent(false) : undefined}
@@ -291,22 +300,16 @@ function PenDropdown() {
 }
 
 export function Ribbon() {
-  const activeLayer = useDrawingStore((s) => s.activeLayer)
-  const primaryTools = activeLayer === 'BOUNDARY' ? PRIMARY_BOUNDARY : PRIMARY_DEFAULT
   return (
     <div className="toolbar-rail">
-      <ToolBtn tool={PAN_TOOL} />
+      {GROUP_NAV.map((t) => <ToolBtn key={t.key} tool={t} />)}
 
       <div className="rail-sep" />
-      {primaryTools.map((t) => <ToolBtn key={t.key} tool={t} />)}
+      {GROUP_DRAW.map((t) => <ToolBtn key={t.key} tool={t} />)}
 
       <div className="rail-sep" />
       {REST_TOOLS.map((t) => <ToolBtn key={t.key} tool={t} />)}
-
-      <div className="rail-sep" />
       <ToolBtn tool={{ key: 'INTENT_PIN', label: 'Intent Pin', Icon: MapPin }} />
-
-      <div className="rail-sep" />
       <ColorDropdown />
       <PenDropdown />
       <ExportDropdown />

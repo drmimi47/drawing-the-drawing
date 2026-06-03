@@ -16,6 +16,7 @@ export function useEraser() {
   const { camera } = useThree()
   const beginHistory = useDrawingStore((s) => s.beginHistory)
   const eraseCapsule = useDrawingStore((s) => s.eraseCapsule)
+  const eraseSegmentAt = useDrawingStore((s) => s.eraseSegmentAt)
 
   const erasingRef = useRef(false)
   const historyPushedRef = useRef(false)
@@ -25,6 +26,17 @@ export function useEraser() {
     (x: number, y: number) => {
       const zoom = (camera as OrthographicCamera).zoom || 1
       const radius = ERASE_RADIUS_PX / zoom
+
+      // Polyline segment eraser: a click/swipe over a polyline (graph straight
+      // stroke) or circulation centerline deletes just that segment, plus any lone
+      // leftover vertex. Tried first; it's its own undoable step and bypasses the
+      // capsule drag-history bookkeeping. Scribbles fall through to the capsule
+      // below (unchanged behaviour).
+      if (eraseSegmentAt(x, y, radius)) {
+        lastRef.current = { x, y }
+        return
+      }
+
       const last = lastRef.current ?? { x, y }
       lastRef.current = { x, y }
 
@@ -42,7 +54,7 @@ export function useEraser() {
       }
       eraseCapsule(last.x, last.y, x, y, radius)
     },
-    [camera, beginHistory, eraseCapsule],
+    [camera, beginHistory, eraseCapsule, eraseSegmentAt],
   )
 
   useEffect(() => {

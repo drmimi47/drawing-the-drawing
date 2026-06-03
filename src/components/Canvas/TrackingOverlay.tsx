@@ -33,7 +33,10 @@ function PlusGlyph({ position }: { position: [number, number] }) {
   const lineObj = useMemo(() => {
     const g = new THREE.BufferGeometry()
     g.setAttribute('position', new THREE.BufferAttribute(PLUS_PTS, 3))
-    const mat = new THREE.LineBasicMaterial({ color: COLOR_TRACK, depthTest: false, toneMapped: false })
+    // transparent so it joins the transparent pass and sorts above the boundary
+    // infill / circulation bands / map underlay (otherwise opaque glyphs render
+    // first and get painted over by those transparent fills).
+    const mat = new THREE.LineBasicMaterial({ color: COLOR_TRACK, depthTest: false, transparent: true, toneMapped: false })
     const obj = new THREE.LineSegments(g, mat)
     obj.renderOrder = 36
     obj.frustumCulled = false

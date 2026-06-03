@@ -1,6 +1,6 @@
-/* Right-panel Layer Hierarchy & Constraints (Foundation A). Fixed-width column to
-   the right of the canvas; the canvas flexes to fill what's left, so the Mapbox
-   underlay (inset:0 within .canvas-area) is naturally confined beside it. */
+/* Right-panel Layer Hierarchy (Foundation A). Fixed-width column to the right of
+   the canvas; the canvas flexes to fill what's left, so the Mapbox underlay
+   (inset:0 within .canvas-area) is naturally confined beside it. */
 .right-panel {
   flex: 0 0 240px;
   width: 240px;
@@ -19,11 +19,6 @@
 .right-panel-section {
   padding: 12px;
   border-bottom: 1px solid var(--panel-border);
-}
-
-.right-panel-section--grow {
-  flex: 1 1 auto;
-  border-bottom: none;
 }
 
 .right-panel-heading {
@@ -179,7 +174,7 @@
   color: var(--accent);
 }
 
-/* ---- Constraints empty state ---- */
+/* ---- Section empty state ---- */
 .right-panel-empty {
   font-size: 12px;
   line-height: 1.5;
@@ -323,58 +318,4 @@
 
 .panel-btn--danger {
   color: #c0392b;
-}
-
-/* ---- Constraint (lock) rows ---- */
-.constraint-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.constraint-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
-  background: var(--panel-2);
-}
-
-.constraint-row.is-locked {
-  border-left: 2px solid var(--accent);
-}
-
-.constraint-name {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.lock-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 24px;
-  border: 1px solid var(--panel-border);
-  border-radius: 0;
-  background: var(--panel);
-  color: var(--text-dim);
-  cursor: pointer;
-  transition: color 120ms ease, background 120ms ease;
-}
-
-.lock-toggle[aria-pressed='true'] {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.lock-toggle:hover {
-  background: var(--hover);
-}
-
-.lock-toggle[aria-pressed='true']:hover {
-  background: var(--accent);
 }

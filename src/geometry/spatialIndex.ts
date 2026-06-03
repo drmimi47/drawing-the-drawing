@@ -368,8 +368,33 @@ export class SpatialGrid {
   }
 }
 
-/** Build a fresh spatial index of all snap targets in the graph. */
-export function buildSnapIndex(graph: Graph, cell = DEFAULT_CELL): SpatialGrid {
+/** A non-graph polyline (lot boundary ring, circulation centerline) to also index. */
+export interface ExtraPolyline {
+  /** Stable id prefix, unique per feature (e.g. 'bnd' or `circ:<pathId>`). */
+  id: string
+  points: { x: number; y: number }[]
+  /** Closed ring (boundary) vs open path (circulation centerline). */
+  closed: boolean
+}
+
+/** Index a standalone polyline's vertices + segment edges under a unique prefix. */
+function addPolyline(grid: SpatialGrid, { id, points, closed }: ExtraPolyline): void {
+  const n = points.length
+  if (n < 2) return
+  for (let i = 0; i < n; i++) grid.addVertex(`${id}:v${i}`, points[i].x, points[i].y)
+  const segCount = closed ? n : n - 1
+  for (let i = 0; i < segCount; i++) {
+    grid.addEdge(`${id}:e${i}`, `${id}:v${i}`, `${id}:v${(i + 1) % n}`)
+  }
+}
+
+/**
+ * Build a fresh spatial index of all snap targets in the graph, plus any extra
+ * standalone polylines (the lot boundary and circulation centerlines, which live
+ * outside the PSLG graph) so the Polyline tool can snap to / share their vertices
+ * and edges too.
+ */
+export function buildSnapIndex(graph: Graph, extras: ExtraPolyline[] = [], cell = DEFAULT_CELL): SpatialGrid {
   const grid = new SpatialGrid(cell)
 
   for (const id in graph.vertices) {
@@ -380,6 +405,8 @@ export function buildSnapIndex(graph: Graph, cell = DEFAULT_CELL): SpatialGrid {
   for (const e of deriveEdges(graph)) {
     if (graph.vertices[e.v0] && graph.vertices[e.v1]) grid.addEdge(e.id, e.v0, e.v1)
   }
+
+  for (const poly of extras) addPolyline(grid, poly)
 
   return grid
 }

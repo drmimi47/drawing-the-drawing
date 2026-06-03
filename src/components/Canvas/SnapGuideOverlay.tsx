@@ -221,6 +221,11 @@ function RightAngleGlyph({
     const mat = new THREE.LineBasicMaterial({
       color: COLOR_GREEN,
       depthTest: false,
+      // transparent so the glyph joins the transparent render pass and its high
+      // renderOrder (36) sorts ABOVE the boundary infill / circulation bands /
+      // map underlay (all transparent) — otherwise opaque glyphs draw first and
+      // get painted over by them.
+      transparent: true,
       toneMapped: false,
     })
     const obj = new THREE.Line(g, mat)
@@ -268,6 +273,7 @@ function ParallelGlyph({
     const mat = new THREE.LineBasicMaterial({
       color: COLOR_MAGENTA,
       depthTest: false,
+      transparent: true, // see note in RightAngleGlyph — sort above transparent fills
       toneMapped: false,
     })
     const obj = new THREE.LineSegments(g, mat)
@@ -322,7 +328,7 @@ function EndpointGlyph({ position }: { position: [number, number] }) {
 
   return (
     <lineLoop ref={ref} geometry={geometry} renderOrder={36} frustumCulled={false}>
-      <lineBasicMaterial color={COLOR_GREEN} depthTest={false} toneMapped={false} />
+      <lineBasicMaterial color={COLOR_GREEN} depthTest={false} transparent toneMapped={false} />
     </lineLoop>
   )
 }
@@ -351,7 +357,7 @@ function EdgeGlyph({ position }: { position: [number, number] }) {
 
   return (
     <lineLoop ref={ref} geometry={geometry} renderOrder={36} frustumCulled={false}>
-      <lineBasicMaterial color={COLOR_GREEN} depthTest={false} toneMapped={false} />
+      <lineBasicMaterial color={COLOR_GREEN} depthTest={false} transparent toneMapped={false} />
     </lineLoop>
   )
 }
@@ -380,7 +386,7 @@ function MidpointGlyph({ position }: { position: [number, number] }) {
 
   return (
     <lineLoop ref={ref} geometry={geometry} renderOrder={36} frustumCulled={false}>
-      <lineBasicMaterial color={COLOR_GREEN} depthTest={false} toneMapped={false} />
+      <lineBasicMaterial color={COLOR_GREEN} depthTest={false} transparent toneMapped={false} />
     </lineLoop>
   )
 }
@@ -394,6 +400,11 @@ function IntersectionGlyph({ position }: { position: [number, number] }) {
     const mat = new THREE.LineBasicMaterial({
       color: COLOR_GREEN,
       depthTest: false,
+      // transparent so the glyph joins the transparent render pass and its high
+      // renderOrder (36) sorts ABOVE the boundary infill / circulation bands /
+      // map underlay (all transparent) — otherwise opaque glyphs draw first and
+      // get painted over by them.
+      transparent: true,
       toneMapped: false,
     })
     const obj = new THREE.LineSegments(g, mat)

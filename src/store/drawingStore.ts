@@ -13,11 +13,19 @@ import type {
   TextLabel,
 } from '../types/geometry'
 import { emptyGraph } from '../types/geometry'
-import { addStrokeToGraph, eraseGraphCapsule } from '../geometry/graph'
+import {
+  addStrokeToGraph,
+  eraseGraphCapsule,
+  nearestStraightSegment,
+  removeStrokeSegment,
+  pointSegmentDistSq,
+} from '../geometry/graph'
 import { segmentStrokesByPolygon } from '../geometry/clip'
 import { simplifyRDP } from '../geometry/simplify'
-import { buildSnapIndex, type SpatialGrid } from '../geometry/spatialIndex'
+import { buildSnapIndex, type SpatialGrid, type ExtraPolyline } from '../geometry/spatialIndex'
 import { buildCirculationMask } from '../geometry/corridor'
+import { clipPolylineToPolygon } from '../geometry/clipPolyline'
+import { nearestBoundarySegment, eraseBoundarySegment } from '../geometry/boundaryEdit'
 
 /**
  * Central canvas + tool state (Cluster D).
@@ -132,6 +140,8 @@ interface HistoryEntry {
   lockPolygons: LockPolygon[]
   intentPins: IntentPin[]
   textLabels: TextLabel[]
+  boundary: Boundary | null
+  circulationPaths: CirculationPath[]
 }
 
 /** Transient text being placed/edited, or null. */
@@ -217,6 +227,8 @@ interface DrawingState {
   gridSpacing: number
   /** Lot boundary (Stage 1) — the master working area; null until traced. */
   boundary: Boundary | null
+  /** Opacity (0..1) of the lot-boundary interior fill. */
+  boundaryInfillOpacity: number
   /** Circulation centerlines (Stage 2). */
   circulationPaths: CirculationPath[]
   /** Global corridor width (world units) applied to new/unlocked paths. */
@@ -260,16 +272,14 @@ interface DrawingState {
   clearBoundary: () => void
   /** Set the advisory target area (drives the delta readout); undefined clears it. */
   setBoundaryTargetSqf: (sqf: number | undefined) => void
-  /** Freeze/unfreeze the boundary as an immutable anchor (Foundation A). */
-  setBoundaryLocked: (locked: boolean) => void
+  /** Set the lot-boundary interior fill opacity (0..1). */
+  setBoundaryInfillOpacity: (opacity: number) => void
   /** Add a circulation centerline (uses the current global width); rebuilds mask. */
   addCirculationPath: (centerline: { x: number; y: number }[]) => void
-  /** Remove all UNLOCKED circulation paths; rebuilds mask. */
+  /** Remove all circulation paths; rebuilds mask. */
   clearCirculation: () => void
-  /** Set the global corridor width; re-offsets unlocked paths + rebuilds mask. */
+  /** Set the global corridor width; re-offsets paths + rebuilds mask. */
   setCirculationWidth: (width: number) => void
-  /** Lock/unlock all circulation paths (Foundation A group lock). */
-  setCirculationLocked: (locked: boolean) => void
   setColor: (color: string) => void
   setBaseWidth: (width: number) => void
   setLineStyle: (style: LineStyle) => void
@@ -324,6 +334,11 @@ interface DrawingState {
   commitStroke: (points: SamplePoint[], color: string, raw?: RawSample[], straight?: boolean) => void
   /** Erase along the swept capsule (caller manages history for the drag). */
   eraseCapsule: (ax: number, ay: number, bx: number, by: number, r: number) => boolean
+  /** Polyline segment eraser: delete the nearest polyline segment within `r` of
+   *  (x,y) — a graph straight-stroke edge or a circulation centerline segment —
+   *  dropping any lone leftover vertex. Skips scribbles and the boundary. Returns
+   *  whether a segment was deleted. */
+  eraseSegmentAt: (x: number, y: number, r: number) => boolean
   undo: () => void
   redo: () => void
   /** Pop the last snapshot WITHOUT creating a redo step (used to cancel a preview). */
@@ -364,6 +379,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   gridType: 'none',
   gridSpacing: 32,
   boundary: null,
+  boundaryInfillOpacity: 0.15,
   circulationPaths: [],
   circulationWidth: 12,
   circulationMask: null,
@@ -409,7 +425,6 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   setGridSpacing: (spacing) => set({ gridSpacing: Math.max(1, Math.round(spacing) || 1) }),
   setBoundary: (ring) =>
     set((state) => {
-      if (state.boundary?.isLocked) return {} // locked boundary is immutable
       // Normalize: drop a trailing point that repeats the first (closed ring).
       const r = ring.slice()
       if (r.length > 1) {
@@ -418,45 +433,74 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         if (Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6) r.pop()
       }
       if (r.length < 3) return {}
-      return { boundary: { ...state.boundary, ring: r } }
+      // A freshly committed boundary is a complete closed loop (re-closing it after
+      // a segment erase also routes here, restoring isClosed: true).
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        boundary: { ...state.boundary, ring: r, isClosed: true },
+      }
     }),
   clearBoundary: () =>
-    set((state) => (state.boundary?.isLocked ? {} : { boundary: null })),
+    set((state) => {
+      if (!state.boundary) return {}
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        boundary: null,
+      }
+    }),
   setBoundaryTargetSqf: (sqf) =>
     set((state) => (state.boundary ? { boundary: { ...state.boundary, targetSqf: sqf } } : {})),
-  setBoundaryLocked: (locked) =>
-    set((state) => (state.boundary ? { boundary: { ...state.boundary, isLocked: locked } } : {})),
+  setBoundaryInfillOpacity: (opacity) =>
+    set({ boundaryInfillOpacity: Math.max(0, Math.min(1, opacity)) }),
   addCirculationPath: (centerline) =>
     set((state) => {
       if (centerline.length < 2) return {}
-      const path: CirculationPath = {
-        id: `circ-${Date.now()}-${circulationCounter++}`,
-        centerline: centerline.map((p) => ({ x: p.x, y: p.y })),
+      // Trim to the lot boundary: keep only the portions inside it. A path that
+      // exits and re-enters the lot is split into several inside pieces; one that
+      // lies entirely outside is dropped. With no boundary, the path is kept as-is.
+      const ring =
+        state.boundary && state.boundary.isClosed !== false ? state.boundary.ring : undefined
+      const pieces =
+        ring && ring.length >= 3
+          ? clipPolylineToPolygon(centerline, ring)
+          : [centerline.map((p) => ({ x: p.x, y: p.y }))]
+      if (pieces.length === 0) return {}
+      const stamp = Date.now()
+      const newPaths: CirculationPath[] = pieces.map((pts) => ({
+        id: `circ-${stamp}-${circulationCounter++}`,
+        centerline: pts,
         width: state.circulationWidth,
+      }))
+      const circulationPaths = [...state.circulationPaths, ...newPaths]
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        circulationPaths,
+        circulationMask: buildCirculationMask(circulationPaths),
       }
-      const circulationPaths = [...state.circulationPaths, path]
-      return { circulationPaths, circulationMask: buildCirculationMask(circulationPaths) }
     }),
   clearCirculation: () =>
     set((state) => {
-      const remaining = state.circulationPaths.filter((p) => p.isLocked)
+      if (state.circulationPaths.length === 0) return {} // nothing to remove
       return {
-        circulationPaths: remaining,
-        circulationMask: remaining.length ? buildCirculationMask(remaining) : null,
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        circulationPaths: [],
+        circulationMask: null,
       }
     }),
   setCirculationWidth: (width) =>
     set((state) => {
       const w = Math.max(1, width)
-      const circulationPaths = state.circulationPaths.map((p) => (p.isLocked ? p : { ...p, width: w }))
+      const circulationPaths = state.circulationPaths.map((p) => ({ ...p, width: w }))
       return {
         circulationWidth: w,
         circulationPaths,
         circulationMask: circulationPaths.length ? buildCirculationMask(circulationPaths) : null,
       }
     }),
-  setCirculationLocked: (locked) =>
-    set((state) => ({ circulationPaths: state.circulationPaths.map((p) => ({ ...p, isLocked: locked })) })),
   setColor: (color) => set({ strokeColor: color }),
   setBaseWidth: (width) => set({ baseWidth: width }),
   setLineStyle: (style) => set({ lineStyle: style }),
@@ -655,6 +699,90 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
     set({ graph: next })
     return true
   },
+  eraseSegmentAt: (x, y, r) => {
+    const state = get()
+    const r2 = r * r
+    const inBoundaryLayer = state.activeLayer === 'BOUNDARY'
+
+    // Nearest graph straight-stroke (polyline) segment.
+    const gHit = nearestStraightSegment(state.graph, x, y)
+    const graphBest = gHit && gHit.distSq <= r2 ? gHit : null
+
+    // Nearest circulation centerline segment — NOT in the Boundary layer, where
+    // corridors are only a read-only reference.
+    let circBest: { pathId: string; seg: number; distSq: number } | null = null
+    if (!inBoundaryLayer) {
+      for (const p of state.circulationPaths) {
+        const c = p.centerline
+        for (let i = 0; i < c.length - 1; i++) {
+          const d = pointSegmentDistSq(x, y, c[i], c[i + 1])
+          if (d <= r2 && (!circBest || d < circBest.distSq)) circBest = { pathId: p.id, seg: i, distSq: d }
+        }
+      }
+    }
+
+    // Nearest lot-boundary edge — ONLY in the Boundary layer; the boundary is
+    // protected everywhere else.
+    let bndBest: { seg: number; distSq: number } | null = null
+    if (inBoundaryLayer && state.boundary) {
+      const closed = state.boundary.isClosed !== false
+      bndBest = nearestBoundarySegment(state.boundary.ring, closed, x, y)
+      if (bndBest && bndBest.distSq > r2) bndBest = null
+    }
+
+    if (!graphBest && !circBest && !bndBest) return false
+
+    // Whichever polyline/boundary segment is globally closest to the cursor wins.
+    const bndWins = bndBest && (!graphBest || bndBest.distSq <= graphBest.distSq) && (!circBest || bndBest.distSq <= circBest.distSq)
+    if (bndWins) {
+      set((s) => {
+        if (!s.boundary) return {}
+        const closed = s.boundary.isClosed !== false
+        const next = eraseBoundarySegment(s.boundary.ring, closed, bndBest!.seg)
+        // Drop the whole boundary if nothing erasable survives; otherwise it
+        // becomes an OPEN chain that must be re-closed to unlock later layers.
+        return {
+          past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
+          future: [],
+          boundary: next ? { ...s.boundary, ring: next.ring, isClosed: next.isClosed } : null,
+        }
+      })
+      return true
+    }
+
+    // Whichever polyline segment is globally closest to the cursor wins.
+    if (graphBest && (!circBest || graphBest.distSq <= circBest.distSq)) {
+      set((s) => ({
+        past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
+        future: [],
+        graph: removeStrokeSegment(s.graph, graphBest.strokeId, graphBest.seg),
+      }))
+      return true
+    }
+
+    // Circulation: split the path at the segment; drop sub-runs of < 2 points
+    // (a lone leftover vertex isn't a line). Undoable like the other edits.
+    set((s) => {
+      const paths: CirculationPath[] = []
+      for (const p of s.circulationPaths) {
+        if (p.id !== circBest!.pathId) {
+          paths.push(p)
+          continue
+        }
+        const c = p.centerline
+        for (const run of [c.slice(0, circBest!.seg + 1), c.slice(circBest!.seg + 1)]) {
+          if (run.length >= 2) paths.push({ ...p, id: `circ-${Date.now()}-${circulationCounter++}`, centerline: run })
+        }
+      }
+      return {
+        past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
+        future: [],
+        circulationPaths: paths,
+        circulationMask: paths.length ? buildCirculationMask(paths) : null,
+      }
+    })
+    return true
+  },
   undo: () =>
     set((state) => {
       if (state.past.length === 0) return {}
@@ -665,6 +793,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         lockPolygons: previous.lockPolygons,
         intentPins: previous.intentPins,
         textLabels: previous.textLabels,
+        ...restoreFeatures(previous),
         past,
         future: [...state.future, snapshot(state)].slice(-HISTORY_LIMIT),
       }
@@ -679,6 +808,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         lockPolygons: next.lockPolygons,
         intentPins: next.intentPins,
         textLabels: next.textLabels,
+        ...restoreFeatures(next),
         future,
         past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
       }
@@ -693,6 +823,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         lockPolygons: previous.lockPolygons,
         intentPins: previous.intentPins,
         textLabels: previous.textLabels,
+        ...restoreFeatures(previous),
         past,
       }
     }),
@@ -709,26 +840,56 @@ function snapshot(state: {
   lockPolygons: LockPolygon[]
   intentPins: IntentPin[]
   textLabels: TextLabel[]
+  boundary: Boundary | null
+  circulationPaths: CirculationPath[]
 }): HistoryEntry {
   return {
     graph: state.graph,
     lockPolygons: state.lockPolygons,
     intentPins: state.intentPins,
     textLabels: state.textLabels,
+    boundary: state.boundary,
+    circulationPaths: state.circulationPaths,
   }
 }
 
-// Keep the spatial snap index in lockstep with the graph (improvements C2).
+/** Restore the boundary + circulation portion of a history entry (mask rebuilt). */
+function restoreFeatures(entry: HistoryEntry) {
+  return {
+    boundary: entry.boundary,
+    circulationPaths: entry.circulationPaths,
+    circulationMask: entry.circulationPaths.length ? buildCirculationMask(entry.circulationPaths) : null,
+  }
+}
+
+// Assemble the non-graph polylines (lot boundary ring + circulation centerlines)
+// that should also be snap-able, so the Polyline tool can share their vertices and
+// start/end on their edges — same context-aware snapping the boundary trace uses.
+function snapExtras(state: DrawingState): ExtraPolyline[] {
+  const extras: ExtraPolyline[] = []
+  if (state.boundary && state.boundary.ring.length >= 2) {
+    extras.push({ id: 'bnd', points: state.boundary.ring, closed: state.boundary.isClosed !== false })
+  }
+  for (const p of state.circulationPaths) {
+    if (p.centerline.length >= 2) extras.push({ id: `circ:${p.id}`, points: p.centerline, closed: false })
+  }
+  return extras
+}
+
+// Keep the spatial snap index in lockstep with the graph AND the boundary /
+// circulation polylines (improvements C2).
 //
 // Position-only vertex moves (the drag hot path) are handled INCREMENTALLY inside
 // setVertexPositions, which re-buckets just the moved vertices in place and leaves
 // the strokes array reference untouched. Any action that changes topology — stroke
-// commit, polyline finish, erase, lock/lasso segmentation, undo/redo, clear —
-// produces a NEW strokes array, so strokes-reference inequality is an O(1) signal
-// that the edge set changed and the index must be rebuilt from scratch. This keeps
-// one central maintenance seam without the O(N) rebuild firing on every drag frame.
+// commit, polyline finish, erase, lock/lasso segmentation, undo/redo, clear, or a
+// boundary / circulation edit — produces a NEW array reference, so reference
+// inequality is an O(1) signal that the edge set changed and the index must be
+// rebuilt. This keeps one central seam without the O(N) rebuild firing on drags.
 useDrawingStore.subscribe((state, prev) => {
-  if (state.graph === prev.graph) return
-  if (state.graph.strokes === prev.graph.strokes) return // position-only move, already indexed incrementally
-  useDrawingStore.setState({ spatialIndex: buildSnapIndex(state.graph) })
+  const topologyChanged = state.graph !== prev.graph && state.graph.strokes !== prev.graph.strokes
+  const featuresChanged =
+    state.boundary !== prev.boundary || state.circulationPaths !== prev.circulationPaths
+  if (!topologyChanged && !featuresChanged) return
+  useDrawingStore.setState({ spatialIndex: buildSnapIndex(state.graph, snapExtras(state)) })
 })

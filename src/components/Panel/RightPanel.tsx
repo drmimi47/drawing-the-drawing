@@ -1,18 +1,18 @@
 import { useRef, useState } from 'react'
-import { Map as MapIcon, Square, Upload, Lock, Unlock, Trash2 } from 'lucide-react'
+import { Map as MapIcon, Square, Upload, Lock, Trash2 } from 'lucide-react'
 import { useDrawingStore, type PipelineLayer, type ToolMode, type GridType } from '../../store/drawingStore'
 import { polygonAreaWorld, worldAreaToSqft, formatArea } from '../../geometry/area'
 import { importUnderlay } from '../../io/importUnderlay'
 import './RightPanel.css'
 
 /**
- * Right-panel "Layer Hierarchy & Constraints" (Bloom restructure — Foundation A).
+ * Right-panel "Layer Hierarchy" (Bloom restructure — Foundation A).
  *
- *   (1) LAYER NAVIGATOR — the constraint-accumulating pipeline as a revisitable
- *       vertical stack. Clicking a layer activates it (and its default tool).
+ *   (1) LAYER NAVIGATOR — the pipeline as a revisitable vertical stack. Clicking a
+ *       layer activates it (and its default tool); switching layers is what
+ *       locks/freezes earlier work, so there is no separate constraints panel.
  *   (2) ACTIVE-LAYER CONTROLS — controls for the current layer (Context substrate;
- *       Stage-1 boundary area + advisory delta).
- *   (3) CONSTRAINTS / AREA-LOCK — per-feature lock toggles (boundary is the first).
+ *       Stage-1 boundary area + advisory delta; Stage-2 circulation width).
  */
 
 const LAYERS: { key: PipelineLayer; label: string; n: number }[] = [
@@ -46,7 +46,8 @@ export function RightPanel() {
 
   const layerStatus = (key: PipelineLayer): string => {
     if (key === 'CONTEXT') return context ? (context === 'MAP' ? 'Map underlay' : 'Blank sheet') : 'Choose a substrate'
-    if (key === 'BOUNDARY') return boundary ? (boundary.isLocked ? 'Locked' : 'Defined') : 'Not defined'
+    if (key === 'BOUNDARY')
+      return boundary ? (boundary.isClosed === false ? 'Incomplete' : 'Defined') : 'Not defined'
     if (key === 'CIRCULATION')
       return circulationPaths.length ? `${circulationPaths.length} path${circulationPaths.length > 1 ? 's' : ''}` : 'None yet'
     return NOT_YET.has(key) ? 'Coming soon' : ''
@@ -71,12 +72,14 @@ export function RightPanel() {
             // Two stage gates beyond the sequential rule:
             //   • Lot Boundary stays locked until a substrate (Map / Blank / Import)
             //     is chosen in the Context layer — nothing to draw a boundary on yet.
-            //   • Circulation stays locked until a *closed* boundary exists (an open
-            //     polyline never commits to state.boundary, so it can't unlock it).
+            //   • EVERY layer after Lot Boundary stays locked until a *complete closed*
+            //     boundary exists. Erasing a boundary segment opens the ring (isClosed
+            //     false), which re-locks them until the lot is re-closed.
+            const boundaryComplete = boundary != null && boundary.isClosed !== false
             const locked =
               n > maxLayerReached + 1 ||
               (key === 'BOUNDARY' && context == null) ||
-              (key === 'CIRCULATION' && boundary == null)
+              (n >= LAYERS[1].n + 1 && !boundaryComplete)
             return (
               <li key={key}>
                 <button
@@ -103,8 +106,6 @@ export function RightPanel() {
       {activeLayer === 'CONTEXT' && <ContextControls context={context} setContext={setContext} />}
       {activeLayer === 'BOUNDARY' && <BoundaryControls />}
       {activeLayer === 'CIRCULATION' && <CirculationControls />}
-
-      <ConstraintsSection />
     </aside>
   )
 }
@@ -309,6 +310,8 @@ function BoundaryControls() {
   const mpu = useDrawingStore((s) => s.metersPerWorldUnit)
   const setTargetSqf = useDrawingStore((s) => s.setBoundaryTargetSqf)
   const clearBoundary = useDrawingStore((s) => s.clearBoundary)
+  const infillOpacity = useDrawingStore((s) => s.boundaryInfillOpacity)
+  const setInfillOpacity = useDrawingStore((s) => s.setBoundaryInfillOpacity)
 
   if (!boundary) {
     return (
@@ -318,6 +321,28 @@ function BoundaryControls() {
           Use the Polyline tool to trace a closed boundary over the map, then close
           the loop to commit it.
         </p>
+      </div>
+    )
+  }
+
+  // The segment eraser opened the ring — downstream layers are re-locked until the
+  // lot is re-closed (redraw it with the Polyline tool and close the loop).
+  if (boundary.isClosed === false) {
+    return (
+      <div className="right-panel-section">
+        <h2 className="right-panel-heading">Lot Boundary</h2>
+        <div className="delta-readout" style={{ borderLeftColor: '#dc2626' }}>
+          <span className="metric-label" style={{ color: '#dc2626' }}>Boundary incomplete</span>
+        </div>
+        <p className="right-panel-hint">
+          A segment was erased, so the lot is no longer a closed shape. Either bridge
+          the gap with the Polyline tool — snap a path from one open end to the other
+          to splice it shut — or re-draw the boundary and close the loop. (Ctrl+Z
+          undoes the erase.) This re-enables the later layers.
+        </p>
+        <button type="button" className="panel-btn panel-btn--danger" onClick={clearBoundary}>
+          <Trash2 size={14} strokeWidth={2} /> Clear &amp; redraw
+        </button>
       </div>
     )
   }
@@ -339,6 +364,18 @@ function BoundaryControls() {
         <span className="metric-value">{formatArea(current)} {unit}</span>
       </div>
       {!hasScale && <p className="right-panel-hint">No map scale — showing world units. Use a Map context for real ft².</p>}
+
+      <label className="field">
+        <span className="field-label">Infill opacity — {Math.round(infillOpacity * 100)}%</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={infillOpacity}
+          onChange={(e) => setInfillOpacity(Number(e.target.value))}
+        />
+      </label>
 
       <label className="field">
         <span className="field-label">Target {unit}</span>
@@ -369,12 +406,7 @@ function BoundaryControls() {
         is preserved; the boundary is never auto-scaled).
       </p>
 
-      <button
-        type="button"
-        className="panel-btn panel-btn--danger"
-        disabled={boundary.isLocked}
-        onClick={clearBoundary}
-      >
+      <button type="button" className="panel-btn panel-btn--danger" onClick={clearBoundary}>
         <Trash2 size={14} strokeWidth={2} /> Clear &amp; redraw
       </button>
     </div>
@@ -431,60 +463,3 @@ function CirculationControls() {
   )
 }
 
-// ─── Constraints / Area-Lock (Foundation A) ──────────────────────────────────
-
-function ConstraintsSection() {
-  const boundary = useDrawingStore((s) => s.boundary)
-  const setBoundaryLocked = useDrawingStore((s) => s.setBoundaryLocked)
-  const circulationPaths = useDrawingStore((s) => s.circulationPaths)
-  const setCirculationLocked = useDrawingStore((s) => s.setCirculationLocked)
-
-  const circLocked = circulationPaths.length > 0 && circulationPaths.every((p) => p.isLocked)
-  const hasFeatures = boundary != null || circulationPaths.length > 0
-
-  return (
-    <div className="right-panel-section right-panel-section--grow">
-      <h2 className="right-panel-heading">
-        <Lock size={13} strokeWidth={2} /> Constraints
-      </h2>
-
-      {!hasFeatures ? (
-        <p className="right-panel-empty">
-          Lockable features (boundary, corridors, departments, rooms) appear here as
-          you build each layer.
-        </p>
-      ) : (
-        <ul className="constraint-list">
-          {boundary && (
-            <li className={`constraint-row${boundary.isLocked ? ' is-locked' : ''}`}>
-              <span className="constraint-name">Lot Boundary</span>
-              <button
-                type="button"
-                className="lock-toggle"
-                aria-pressed={boundary.isLocked ?? false}
-                title={boundary.isLocked ? 'Unlock boundary' : 'Lock boundary (freeze as anchor)'}
-                onClick={() => setBoundaryLocked(!boundary.isLocked)}
-              >
-                {boundary.isLocked ? <Lock size={15} strokeWidth={2} /> : <Unlock size={15} strokeWidth={2} />}
-              </button>
-            </li>
-          )}
-          {circulationPaths.length > 0 && (
-            <li className={`constraint-row${circLocked ? ' is-locked' : ''}`}>
-              <span className="constraint-name">Circulation ({circulationPaths.length})</span>
-              <button
-                type="button"
-                className="lock-toggle"
-                aria-pressed={circLocked}
-                title={circLocked ? 'Unlock all corridors' : 'Lock all corridors'}
-                onClick={() => setCirculationLocked(!circLocked)}
-              >
-                {circLocked ? <Lock size={15} strokeWidth={2} /> : <Unlock size={15} strokeWidth={2} />}
-              </button>
-            </li>
-          )}
-        </ul>
-      )}
-    </div>
-  )
-}

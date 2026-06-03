@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { CanvasScene } from './components/Canvas'
+import { BoundaryContextOverlay } from './components/Canvas/BoundaryContextOverlay'
 import { MenuBar } from './components/Menu/MenuBar'
 import { Ribbon } from './components/Ribbon/Ribbon'
 import { Crosshair } from './components/Crosshair/Crosshair'
@@ -67,6 +68,8 @@ export default function App() {
               <MapView />
             </Suspense>
           )}
+          {/* Magenta lot-boundary reference (Context layer), drawn above the map. */}
+          <BoundaryContextOverlay />
         </main>
         <RightPanel />
       </div>

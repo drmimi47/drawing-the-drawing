@@ -24,6 +24,74 @@ export function resolveStrokePoints(graph: Graph, stroke: Stroke): SamplePoint[]
   return out
 }
 
+/** Squared distance from point (px,py) to segment a→b. */
+export function pointSegmentDistSq(
+  px: number,
+  py: number,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len2 = dx * dx + dy * dy
+  let t = len2 > 0 ? ((px - a.x) * dx + (py - a.y) * dy) / len2 : 0
+  t = t < 0 ? 0 : t > 1 ? 1 : t
+  const cx = a.x + t * dx
+  const cy = a.y + t * dy
+  const ex = px - cx
+  const ey = py - cy
+  return ex * ex + ey * ey
+}
+
+/**
+ * Nearest STRAIGHT-stroke segment (polyline edge) to (x, y), or null when the
+ * graph holds no straight strokes. Scribbles (smooth strokes) are skipped so the
+ * segment eraser only acts on polylines. Returns the owning stroke, the segment
+ * index, and the squared distance for global nearest-comparison by the caller.
+ */
+export function nearestStraightSegment(
+  graph: Graph,
+  x: number,
+  y: number,
+): { strokeId: string; seg: number; distSq: number } | null {
+  let best: { strokeId: string; seg: number; distSq: number } | null = null
+  for (const stroke of graph.strokes) {
+    if (!stroke.straight) continue
+    const pts = resolveStrokePoints(graph, stroke)
+    for (let i = 0; i < pts.length - 1; i++) {
+      const d = pointSegmentDistSq(x, y, pts[i], pts[i + 1])
+      if (!best || d < best.distSq) best = { strokeId: stroke.id, seg: i, distSq: d }
+    }
+  }
+  return best
+}
+
+/**
+ * Remove a single segment (the edge between path[seg] and path[seg+1]) from a
+ * stroke, splitting it into the two surviving runs. Runs with fewer than two
+ * vertices are dropped — a lone vertex is no longer a line — and any vertex left
+ * referenced by no surviving stroke is garbage-collected.
+ */
+export function removeStrokeSegment(graph: Graph, strokeId: string, seg: number): Graph {
+  const target = graph.strokes.find((s) => s.id === strokeId)
+  if (!target || seg < 0 || seg >= target.path.length - 1) return graph
+
+  const halves = [target.path.slice(0, seg + 1), target.path.slice(seg + 1)]
+  const subs: Stroke[] = halves
+    .filter((p) => p.length >= 2)
+    .map((p) => ({ ...target, id: newId('s'), path: p }))
+
+  const strokes = graph.strokes.flatMap((s) => (s.id === strokeId ? subs : [s]))
+
+  // Garbage-collect vertices no surviving stroke references.
+  const used = new Set<string>()
+  for (const s of strokes) for (const pp of s.path) used.add(pp.v)
+  const vertices: Record<string, Vertex> = {}
+  for (const id of used) if (graph.vertices[id]) vertices[id] = graph.vertices[id]
+
+  return { vertices, strokes }
+}
+
 /** Derive the edge list (one edge per consecutive vertex pair in each stroke). */
 export function deriveEdges(graph: Graph): Edge[] {
   const edges: Edge[] = []

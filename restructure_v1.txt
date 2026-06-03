@@ -35,27 +35,25 @@ union the circulation network, auto-clip/repel fields, auto-pack rooms, advisory
 area deltas) instead of leaving it to the user's hand.
 
 
-FOUNDATION A — RIGHT PANEL: LAYER HIERARCHY & AREA-LOCK SYSTEM
+FOUNDATION A — RIGHT PANEL: LAYER HIERARCHY
 --------------------------------------------------------------------------------
-Foundational and cross-cutting: build this first; every stage plugs into it. It is
-TWO things in one panel (merge of v1 §1 + the first-pass "layer system" note):
+Foundational and cross-cutting: build this first; every stage plugs into it.
 
-  (1) LAYER NAVIGATOR — a vertical stack of the pipeline layers (Context, Boundary,
-      Circulation, Departments, Rooms, Generate). The user works top-down but may
-      click any layer to REVISIT it; editing an upstream layer re-derives everything
-      below it. These are NOT Photoshop paint layers — each carries METADATA that
-      keeps the others intelligent (e.g. retype a department's room count and the
-      rooms layer regenerates). The active layer gates which tools are live (replaces
-      a free-for-all toolbar with a guided wizard).
+  LAYER NAVIGATOR — a vertical stack of the pipeline layers (Context, Boundary,
+  Circulation, Departments, Rooms, Generate). The user works top-down but may click
+  any layer to REVISIT it; editing an upstream layer re-derives everything below it.
+  These are NOT Photoshop paint layers — each carries METADATA that keeps the others
+  intelligent (e.g. retype a department's room count and the rooms layer regenerates).
+  The active layer gates which tools are live (replaces a free-for-all toolbar with a
+  guided wizard).
 
-  (2) AREA-LOCK / CONSTRAINTS — every committed feature block (a boundary, a corridor,
-      a department polygon, a room node) exposes a Lock toggle that sets JSON
-      `isLocked: true`. Locking is an ABSOLUTE immutability guard:
-        * Marching-squares / field solvers may not deform a locked department's bounds.
-        * Upstream ripple (rescale, re-pack) treats locked vertices as fixed anchors;
-          adjacent FLEXIBLE geometry absorbs the deformation instead.
-        * Stage 5 LLM treats locked zones as influence-1.0 hard vectors: it may
-          attach to them but never move, delete, or re-allocate inside them.
+  FREEZING IS LAYER-DRIVEN — there is NO per-feature Lock toggle. Switching layers is
+  what locks/freezes earlier work: e.g. leaving Context freezes the map underlay, and
+  the layers after Lot Boundary stay gated until the lot is a complete closed loop.
+  (An earlier draft proposed a feature-level `isLocked` Area-Lock panel; that was
+  DROPPED in favor of this layer-based model — see CONFLICTS log #8. The separate
+  spatial LockPolygon in geometry/locks.ts — a feathered soft-influence region — is
+  unrelated and still stands.)
 
   Sub-stages (implement in order):
     A.1  store.stage union extended to CONTEXT | BOUNDARY | CIRCULATION | DEPARTMENTS
@@ -63,15 +61,6 @@ TWO things in one panel (merge of v1 §1 + the first-pass "layer system" note):
          in-layer helpers.)
     A.2  Right-panel Layer Navigator component: list, active highlight, click-to-
          revisit, per-layer status (e.g. "Boundary: 38,200 SQF").
-    A.3  Feature-level `isLocked` metadata + toggle UI on each feature row.
-    A.4  Lock-enforcement guards wired into the three consumers (field solver,
-         ripple/rescale, LLM serializer). Ship A.4 incrementally as each consumer
-         stage lands — don't block A on Stage 3/5 existing.
-
-  CLARIFICATION (CONFLICTS log #8): this feature-level `isLocked` is DISTINCT from the
-  existing spatial LockPolygon (geometry/locks.ts, a feathered soft-influence region).
-  They coexist: LockPolygon = "soften mutation in this area"; isLocked = "this specific
-  feature is frozen." Different scopes, different data.
 
 
 STAGE 0 — CONTEXT  [NEW — merged from first-pass note; absent in original v1]
@@ -125,7 +114,7 @@ its Web Mercator projection / Mapbox alignment. FREE-FLOATING COORDINATE SCALING
 BANNED. We never auto-scale vertices away from the real streets.
 
   1.1  Boundary capture: the polyline tool draws a CLOSED loop; closing it commits a
-       first-class store.boundary = { ring: [x,y][], targetSqf?: number, isLocked? }.
+       first-class store.boundary = { ring: [x,y][], targetSqf?: number }.
        Snapping/O-TRACK (already built) keep the trace clean.
   1.2  Live SQF readout HUD: realArea = shoelace(ring, world) × metersPerWorldUnit².
        Live ft²/m² display. (metersPerWorldUnit already derives from the mercator
@@ -191,8 +180,7 @@ STATUS: IMPLEMENTED — 2.1 capture (store.circulationPaths; polyline finish in 
         CIRCULATION layer adds an open centerline), 2.3 band offset
         (geometry/corridor.ts centerlineToBandRing; filled translucent render via
         the existing ribbon builder in CirculationView), 2.4 mask
-        (store.circulationMask). Width is GLOBAL (re-offsets unlocked paths). Lock is
-        a GROUP toggle over all corridors.
+        (store.circulationMask). Width is GLOBAL (re-offsets all paths).
         DEVIATIONS / DEFERRED:
           • 2.4 stores the ARRAY of per-path band rings and will test point-in-ANY-
             band for exclusion, instead of a single Turf.union multi-polygon — same
@@ -226,7 +214,7 @@ ENTRY POINT: a dedicated "Department Zones" tool/button (first-pass note) extend
 existing IntentPin UX (place → name → strength/radius → target SQF).
 
   3.1  Department entity + tool: store.departments = [{ id, name, center, targetSqf,
-       color, isLocked }]. Reuse IntentPin placement UX + MetaballOverlay rendering.
+       color }]. Reuse IntentPin placement UX + MetaballOverlay rendering.
        Each department is its OWN field channel (its own contour + area readout) — the
        exact mechanic as today's per-IntentType isolation — but the channels BLEND
        visually and may overlap in space (no mutual exclusion). The shared hard mask
@@ -310,35 +298,34 @@ blank-canvas guesser.
        constraint payload:
          parcelBoundary       — full coordinate ring of the site frame
          circulationNetwork   — PSLG nodes/edges + unified circulationMask
-         lockedAreas          — multi-polygons flagged isLocked (from Foundation A)
+         lockedAreas          — feathered spatial LockPolygon regions (geometry/locks.ts)
          flexibleDepartments  — loose dept boundaries + their pins + target-area deltas
          roomPartitions       — room sub-polygon nodes from Stage 4
   5.2  Edge function call: POST the payload to api/generate.ts; the model identifies
        remaining openings / under-allocated department slots and returns clean JSON
        coordinate arrays.
   5.3  Reintegration + iterate: merge the returned vectors into the live PSLG; the
-       designer can accept, enter Vector Edit, tweak vertices, lock adjustments on the
-       right panel, and re-fire — multi-pass iterative refinement, fully non-destructive.
+       designer can accept, enter Vector Edit, tweak vertices, and re-fire — multi-pass
+       iterative refinement, fully non-destructive.
 
 EXISTS: intentSerialization.ts (per-vertex/region intent mix), planned api/generate.ts,
-        Vector Edit, PSLG, Foundation A locks.
+        Vector Edit, PSLG, spatial LockPolygon (geometry/locks.ts).
 NEW:    constraint-payload serializer; edge function; response→PSLG reintegration loop.
 RISK:   med. Serialization is mechanical; the loop UX needs care so re-fires don't
-        clobber locked work (Foundation A guards prevent that).
+        clobber existing work.
 
 
 PROPOSED STORE SHAPE (consolidated, names provisional)
 --------------------------------------------------------------------------------
   context:          'MAP' | 'BLANK'
   stage:            'CONTEXT'|'BOUNDARY'|'CIRCULATION'|'DEPARTMENTS'|'ROOMS'|'GENERATE'
-  boundary:         { ring:[x,y][]; targetSqf?:number; isLocked?:boolean } | null
-  circulationPaths: [{ id; centerline:[x,y][]; width:number; isLocked?:boolean }]
+  boundary:         { ring:[x,y][]; isClosed?:boolean; targetSqf?:number } | null
+  circulationPaths: [{ id; centerline:[x,y][]; width:number }]
        → derived    circulationMask: MultiPolygon (Turf union; cached)
-  departments:      [{ id; name; center; targetSqf; color; isLocked?:boolean }]
+  departments:      [{ id; name; center; targetSqf; color }]
        → derived    per-department contour polygons (own field channel, masked by
                     boundary∩¬circulation; channels BLEND and may overlap each other)
-  rooms:            [{ roomId; parentDeptId; polygon:[x,y][]; areaSqf; locked; rotation? }]
-  Each layer's features expose isLocked to Foundation A.
+  rooms:            [{ roomId; parentDeptId; polygon:[x,y][]; areaSqf; rotation? }]
 
 
 CONFLICTS RESOLVED & IMPROVEMENTS SUBSTITUTED (cross-ref vs restructure.txt)
@@ -359,8 +346,11 @@ CONFLICTS RESOLVED & IMPROVEMENTS SUBSTITUTED (cross-ref vs restructure.txt)
     line-of-sight leak mitigation re-staged as advanced/optional (3.4).
  7. CIRCULATION STORAGE (IMPROVEMENT): store in dedicated store.circulationMask, not
     store.mapGeometry (which holds Mapbox-drawn GeoJSON).
- 8. AREA LOCK: clarified feature-level isLocked vs existing spatial LockPolygon — they
-    coexist (Foundation A).
+ 8. AREA LOCK: an earlier draft added a feature-level isLocked Area-Lock panel on the
+    right side. DROPPED — freezing is now layer-driven (switching layers locks earlier
+    work), so the panel + per-feature lock toggles were removed. The separate spatial
+    LockPolygon (geometry/locks.ts, a feathered soft-influence region) is unrelated and
+    still stands.
  9. LAYER SYSTEM: merged the first-pass "stacked, revisitable, metadata-carrying layer"
     note into Foundation A as the Layer Navigator (not Photoshop layers).
 10. SUB-STAGING: every stage decomposed into ordered sub-stages with EXISTS/NEW/RISK,

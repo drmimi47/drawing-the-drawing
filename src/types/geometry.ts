@@ -138,15 +138,18 @@ export const emptyGraph = (): Graph => ({ vertices: {}, strokes: [] })
 /**
  * Lot boundary (Bloom restructure — Stage 1). A first-class, closed ring that is
  * the master working area ("a canvas within the canvas"). `targetSqf` drives the
- * advisory delta readout (never an auto-transform — Stage 1.3). `isLocked` freezes
- * it as an immutable anchor (Foundation A).
+ * advisory delta readout (never an auto-transform — Stage 1.3).
  */
 export interface Boundary {
-  /** Closed ring in world coordinates (first point not repeated at the end). */
+  /** Ring in world coordinates (first point not repeated at the end). When
+   *  `isClosed` is false this is an OPEN chain (a segment was erased) and the lot
+   *  must be re-closed before downstream layers unlock. */
   ring: { x: number; y: number }[]
+  /** Whether the ring forms a complete closed loop. Absent ⇒ treated as closed
+   *  (back-compat with boundaries committed before the segment eraser existed). */
+  isClosed?: boolean
   /** Designer's desired gross area, in the active unit; optional. */
   targetSqf?: number
-  isLocked?: boolean
 }
 
 /**
@@ -160,7 +163,6 @@ export interface CirculationPath {
   centerline: { x: number; y: number }[]
   /** Full corridor width in world units. */
   width: number
-  isLocked?: boolean
 }
 
 /**
