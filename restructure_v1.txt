@@ -237,10 +237,10 @@ existing IntentPin UX (place → name → strength/radius → target SQF).
        from pins, or line-of-sight test against circulationMask). Ship 3.2/3.3 first;
        3.4 is a refinement, not a blocker. (This is v1's "leak mitigation" goal, re-
        staged as advanced so the stage can succeed without it.)
-  3.5  Area diagnostics + targeting + lock: per-department SQF readout (area of its
-       masked contour) in the right panel; solve the field level-set so enclosed area
-       ≈ targetSqf (per-region analogue of the boundary advisory loop, bounded by
-       available masked area); area-lock a department once its budget is met.
+  3.5  Area diagnostics + targeting: per-department SQF readout (area of its masked
+       contour) in the right panel; solve the field level-set so enclosed area ≈
+       targetSqf (per-region analogue of the boundary advisory loop, bounded by
+       available masked area).
 
 EXISTS: IntentPin UX, metaballField.ts (Wyvill), MetaballOverlay GPU shader (already
         texture-streams pins), marchingSquares.ts contours, getRegionConcentration,
@@ -255,12 +255,12 @@ OPEN:   SQF over-allocation (proportional shrink vs flag); fate of the 4 generic
 
 STAGE 4 — INTERNAL ROOM SUBDIVISION
 --------------------------------------------------------------------------------
-GOAL: subdivide a (locked) department polygon into rooms. HYBRID model resolving the
+GOAL: subdivide a department polygon into rooms. HYBRID model resolving the
 two source visions (CONFLICTS log #2): PARAMETRIC packing is primary; manual editing
 and partition lines refine it; both emit the SAME room nodes.
 
   4.1  Room data model: store.rooms nodes
-       { roomId, parentDeptId, polygon:[x,y][], areaSqf, locked, rotation? }.
+       { roomId, parentDeptId, polygon:[x,y][], areaSqf, rotation? }.
        A room is always a valid sub-polygon of its parent department.
   4.2  PARAMETRIC PACK (primary): in a department, the user types a ROOM COUNT N. The
        engine generates N best-fit rectangles packed tight (shared/adjacent edges)

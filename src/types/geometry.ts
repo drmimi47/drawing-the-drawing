@@ -82,6 +82,21 @@ export interface TextLabel {
   size: number
 }
 
+/**
+ * A freehand scribble — a pure raster-style annotation. It is deliberately NOT
+ * part of the planar graph (it never affects boundaries, circulation, snapping, or
+ * generation); it's just a quick mark the designer paints on top. Points are an
+ * open world-space polyline; `width` is the pen thickness in world units. The
+ * eraser removes a whole scribble at once (Figma-style), not segment-by-segment.
+ */
+export interface ScribbleStroke {
+  id: string
+  color: string
+  /** Pen thickness in world units (scales with zoom, like the old vector stroke). */
+  width: number
+  points: { x: number; y: number }[]
+}
+
 /** A derived edge (segment between two consecutive path vertices). */
 export interface Edge {
   id: string

@@ -3,7 +3,7 @@ import { useFrame, type ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { useDrawingStore } from '../../store/drawingStore'
 import { useCanvasStore } from '../../store/canvasStore'
-import { useDrawing } from '../../hooks/useDrawing'
+import { useScribble } from '../../hooks/useScribble'
 import { useEraser } from '../../hooks/useEraser'
 import { useSelection } from '../../hooks/useSelection'
 import { useVectorEdit } from '../../hooks/useVectorEdit'
@@ -17,7 +17,6 @@ import { buildStrokeGeometry } from './strokeGeometry'
 import { MarchingAntsLine } from './MarchingAntsLine'
 import { LockFieldView } from './LockFieldView'
 import { IntentFieldView } from './IntentFieldView'
-import { TextLayer } from './TextLayer'
 import { SnapIndicator } from './SnapIndicator'
 import { SnapGuideOverlay } from './SnapGuideOverlay'
 import { TrackingOverlay } from './TrackingOverlay'
@@ -177,7 +176,7 @@ export function DrawingLayer() {
   const activeSnapGuide = useDrawingStore((s) => s.activeSnapGuide)
   const isSpaceDown = useCanvasStore((s) => s.isSpaceDown)
 
-  const draw = useDrawing()
+  const scribble = useScribble()
   const eraser = useEraser()
   const selection = useSelection()
   const vectorEdit = useVectorEdit()
@@ -220,7 +219,7 @@ export function DrawingLayer() {
                 ? polyline
                 : toolMode === 'TEXT'
                   ? textTool
-                  : draw
+                  : scribble
 
   return (
     <>
@@ -232,16 +231,16 @@ export function DrawingLayer() {
       />
       <LockFieldView locks={lockPolygons} />
       <IntentFieldView pins={intentPins} pending={pendingPin} />
-      <TextLayer />
+      {/* Committed text renders as a DOM overlay above the map (see <TextOverlay/> in
+          App), not inside the R3F scene, so it stays visible over the map substrate. */}
       {/* Circulation corridor bands (Stage 2) + lot boundary frame (Stage 1). */}
       <CirculationView />
       <BoundaryView />
       {graph.strokes.map((stroke) => (
         <StrokeView key={stroke.id} graph={graph} stroke={stroke} selected={selectedSet.has(stroke.id)} />
       ))}
-      {draw.live && (
-        <RibbonMesh points={draw.live} color={draw.liveColor} lineStyle={lineStyle} strokeWidth={baseWidth} />
-      )}
+      {/* Scribbles render as a raster <canvas> overlay above the map (see
+          <ScribbleOverlay/> in App), not in the R3F scene. */}
       {toolMode === 'POLYLINE' && polyline.preview.length >= 2 && (
         <RibbonMesh points={polyline.preview} color={strokeColor} straight lineStyle={lineStyle} strokeWidth={baseWidth} onTop />
       )}

@@ -11,19 +11,6 @@ import type { LineStyle, SamplePoint } from '../../types/geometry'
 
 const RESAMPLE_SPACING = 3 // world units between resampled centerline points
 
-/**
- * Convert pointer samples to centerline points at a FIXED, uniform half-width.
- * Pressure / tilt / speed are deliberately ignored — every stroke is the same
- * thickness from start to finish.
- */
-export function rawToStrokePoints(
-  points: { x: number; y: number }[],
-  baseWidth: number,
-): SamplePoint[] {
-  const halfWidth = baseWidth / 2
-  return points.map((p) => ({ x: p.x, y: p.y, w: halfWidth }))
-}
-
 function dist(a: SamplePoint, b: SamplePoint): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }

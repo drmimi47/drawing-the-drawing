@@ -13,7 +13,7 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css'
 import { useDrawingStore } from '../../store/drawingStore'
 import { useCanvasStore } from '../../store/canvasStore'
-import { mercatorMetersPerWorldUnit, formatScale } from '../../geometry/geoScale'
+import { mercatorMetersPerWorldUnit } from '../../geometry/geoScale'
 import { artboardScreenRect } from '../../utils/viewport'
 import './MapView.css'
 
@@ -86,7 +86,6 @@ export function MapView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   const [metric, setMetric] = useState<Metric | null>(null)
-  const [scale, setScale] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Confine the map to the page-sheet (artboard) rectangle rather than the whole
@@ -180,7 +179,6 @@ export function MapView() {
     // every pan/zoom — not just zoom.
     const refreshScale = () => {
       const mpu = mercatorMetersPerWorldUnit(map.getCenter().lat, map.getZoom())
-      setScale(mpu)
       setGeoScale(mpu)
     }
 
@@ -200,7 +198,6 @@ export function MapView() {
       map.remove()
       mapRef.current = null
       setMetric(null)
-      setScale(null)
       // Leaving the map removes its real-world calibration from the canvas.
       setGeoScale(null)
     }
@@ -256,20 +253,13 @@ export function MapView() {
       {frozen && frozenImg && <img className="map-frozen" src={frozenImg} alt="" draggable={false} />}
       {/* Adjustable dimmer — fades the map toward white so drawing reads clearly. */}
       <div className="map-dim" style={{ opacity: mapDim }} />
-      {(scale !== null || metric) && (
+      {/* Live feature measurement (selected/drawn map feature). The real-world SCALE
+          readout now lives outside the artboard (see <SheetScale/> in App) so it
+          stays frozen + visible across every layer. */}
+      {metric && (
         <div className="map-hud" role="status">
-          {scale !== null && (
-            <>
-              <span className="map-hud-label">Scale · 1 unit ≈</span>
-              <span className="map-hud-value">{formatScale(scale)}</span>
-            </>
-          )}
-          {metric && (
-            <>
-              <span className="map-hud-label">{metric.label}</span>
-              <span className="map-hud-value">{metric.value}</span>
-            </>
-          )}
+          <span className="map-hud-label">{metric.label}</span>
+          <span className="map-hud-value">{metric.value}</span>
         </div>
       )}
       {error && <div className="map-error">{error}</div>}

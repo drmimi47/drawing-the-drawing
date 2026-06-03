@@ -1,6 +1,10 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { CanvasScene } from './components/Canvas'
 import { BoundaryContextOverlay } from './components/Canvas/BoundaryContextOverlay'
+import { TextOverlay } from './components/Canvas/TextOverlay'
+import { ScribbleOverlay } from './components/Canvas/ScribbleOverlay'
+import { SheetTitle } from './components/Canvas/SheetTitle'
+import { SheetScale } from './components/Canvas/SheetScale'
 import { MenuBar } from './components/Menu/MenuBar'
 import { Ribbon } from './components/Ribbon/Ribbon'
 import { Crosshair } from './components/Crosshair/Crosshair'
@@ -9,6 +13,7 @@ const MapView = lazy(() => import('./components/Map/MapView').then((m) => ({ def
 import { NormalizeMenu } from './components/Toolbar/NormalizeMenu'
 import { IntentPinMenu } from './components/Toolbar/IntentPinMenu'
 import { TextEditor } from './components/Toolbar/TextEditor'
+import { TextHoverPreview } from './components/Toolbar/TextHoverPreview'
 import { SnapToast } from './components/Toolbar/SnapToast'
 import { RightPanel } from './components/Panel/RightPanel'
 import { useDrawingStore } from './store/drawingStore'
@@ -70,13 +75,22 @@ export default function App() {
           )}
           {/* Magenta lot-boundary reference (Context layer), drawn above the map. */}
           <BoundaryContextOverlay />
+          {/* Freehand scribbles (raster), pinned in world space ABOVE the map in all layers. */}
+          <ScribbleOverlay />
+          {/* Committed text labels, pinned in world space ABOVE the map in all layers. */}
+          <TextOverlay />
+          {/* Editable sheet title at the artboard's bottom-right corner. */}
+          <SheetTitle />
+          {/* Real-world scale readout at the artboard's bottom-left corner. */}
+          <SheetScale />
+          {/* CAD crosshair — inside canvas-area so overflow:hidden clips it to the
+              canvas and it never bleeds over the right panel. */}
+          {!mapInteractive && <Crosshair />}
+          {/* Ghost "add text" preview that trails the cursor with the Text tool. */}
+          <TextHoverPreview />
         </main>
         <RightPanel />
       </div>
-
-      {/* Full-viewport pointer crosshair — shown for drawing (incl. tracing over a
-          frozen map), hidden only while the map is the interactive surface. */}
-      {!mapInteractive && <Crosshair />}
 
       {/* Transient confirmation when the snapping toggle flips (F3 / Ctrl+G). */}
       <SnapToast />

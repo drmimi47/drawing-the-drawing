@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useThree } from '@react-three/fiber'
 import type { OrthographicCamera } from 'three'
 import { useCanvasStore } from '../../store/canvasStore'
@@ -21,12 +21,28 @@ const MAX_ZOOM = 20
 const ZOOM_SPEED = 0.001
 
 export function CameraControls() {
-  const { camera, gl } = useThree()
+  const { camera, gl, size } = useThree()
   const setSpaceDown = useCanvasStore((s) => s.setSpaceDown)
   const setPanning = useCanvasStore((s) => s.setPanning)
 
   // Keep the published viewport AABB in sync with the camera.
   useViewport()
+
+  // Fit the artboard to the viewport on first load so the white sheet fills most of
+  // the view (with a grey margin on all sides) instead of floating small in the
+  // middle. Runs once; resizing afterward doesn't re-fit (it would feel jarring).
+  const didFit = useRef(false)
+  useEffect(() => {
+    if (didFit.current || size.width <= 0 || size.height <= 0) return
+    const cam = camera as OrthographicCamera
+    const { pageWidth, pageHeight } = useDrawingStore.getState()
+    const FILL = 0.86 // page covers ~86% of the limiting axis; ~7% grey each side
+    const z = Math.min((size.width * FILL) / pageWidth, (size.height * FILL) / pageHeight)
+    cam.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z))
+    cam.position.set(0, 0, cam.position.z) // page is centered at the world origin
+    cam.updateProjectionMatrix()
+    didFit.current = true
+  }, [camera, size])
 
   useEffect(() => {
     const dom = gl.domElement

@@ -1,20 +1,20 @@
 import { useEffect, useRef } from 'react'
 
 /**
- * Full-viewport precision crosshair (CAD-style) that follows the pointer.
+ * CAD-style crosshair that follows the pointer, clipped to the canvas area.
  *
- * Two 1px lines — one full-width horizontal, one full-height vertical —
- * intersecting at the pointer. Performance notes:
- * - Driven by `pointermove` (mouse + pen/stylus), but the handler only records
- *   the latest coordinates; the DOM is written inside a single
- *   `requestAnimationFrame` callback that runs just before the browser repaints.
- *   This coalesces bursts of pointer events into at most one update per frame,
- *   so the main thread never gets overloaded.
- * - Positions are applied with `transform: translate3d(x, y, 0)` (compositor-only,
- *   GPU-accelerated, no layout/paint) — never `top`/`left`.
- * - The container is `pointer-events: none`, so clicks and selection pass through.
+ * Mounted inside .canvas-area (position:relative) so overflow:hidden naturally
+ * stops the lines at the canvas edge — they never bleed over the right panel.
+ *
+ * clientX/clientY from PointerEvent are viewport-relative; we subtract the
+ * canvas container's bounding rect so the translate values are canvas-relative.
+ *
+ * Performance: pointer events only record coords; all DOM writes happen inside
+ * a single rAF callback (at most one repaint per frame). Transforms are
+ * compositor-only (translate3d) — no layout/paint cost.
  */
 export function Crosshair() {
+  const containerRef = useRef<HTMLDivElement>(null)
   const vRef = useRef<HTMLDivElement>(null)
   const hRef = useRef<HTMLDivElement>(null)
 
@@ -28,14 +28,16 @@ export function Crosshair() {
       rafId = 0
       if (!dirty) return
       dirty = false
+      const rect = containerRef.current?.getBoundingClientRect()
+      const ox = rect?.left ?? 0
+      const oy = rect?.top ?? 0
       const v = vRef.current
       const h = hRef.current
-      if (v) v.style.transform = `translate3d(${x}px, 0, 0)`
-      if (h) h.style.transform = `translate3d(0, ${y}px, 0)`
+      if (v) v.style.transform = `translate3d(${x - ox}px, 0, 0)`
+      if (h) h.style.transform = `translate3d(0, ${y - oy}px, 0)`
     }
 
     const onMove = (e: PointerEvent) => {
-      // Record only; defer the DOM write to the next animation frame.
       x = e.clientX
       y = e.clientY
       dirty = true
@@ -50,7 +52,7 @@ export function Crosshair() {
   }, [])
 
   return (
-    <div className="crosshair" aria-hidden="true">
+    <div ref={containerRef} className="crosshair" aria-hidden="true">
       <div ref={vRef} className="crosshair-line crosshair-line--v" />
       <div ref={hRef} className="crosshair-line crosshair-line--h" />
     </div>

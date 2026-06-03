@@ -18,3 +18,8 @@ export function clampToPage(p: Pt, pageWidth: number, pageHeight: number): Pt {
     y: Math.max(-hh, Math.min(hh, p.y)),
   }
 }
+
+/** True when a world point lies inside the centered page rectangle (the artboard). */
+export function isInsidePage(p: Pt, pageWidth: number, pageHeight: number): boolean {
+  return Math.abs(p.x) <= pageWidth / 2 && Math.abs(p.y) <= pageHeight / 2
+}

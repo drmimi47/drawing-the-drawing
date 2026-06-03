@@ -9,6 +9,7 @@ import type {
   LockPolygon,
   RawSample,
   SamplePoint,
+  ScribbleStroke,
   SnapGuide,
   TextLabel,
 } from '../types/geometry'
@@ -131,6 +132,7 @@ let lockCounter = 0
 let pinCounter = 0
 let textCounter = 0
 let circulationCounter = 0
+let scribbleCounter = 0
 
 const HISTORY_LIMIT = 100
 
@@ -142,6 +144,7 @@ interface HistoryEntry {
   textLabels: TextLabel[]
   boundary: Boundary | null
   circulationPaths: CirculationPath[]
+  scribbles: ScribbleStroke[]
 }
 
 /** Transient text being placed/edited, or null. */
@@ -191,6 +194,10 @@ interface DrawingState {
   textLabels: TextLabel[]
   /** Transient text being placed/edited, or null. */
   pendingText: PendingText | null
+  /** Committed freehand scribbles (raster annotations; not part of the graph). */
+  scribbles: ScribbleStroke[]
+  /** The scribble currently being drawn (transient; not in undo history). */
+  liveScribble: ScribbleStroke | null
   /** When true, every pin shows its intent-type label (driven by toolbar hover). */
   showIntentLabels: boolean
   /** When true, overlay a grid of region intent-concentration percentages
@@ -202,6 +209,8 @@ interface DrawingState {
    *  frame — NOT driven by imports; only the user/default sets it. */
   pageWidth: number
   pageHeight: number
+  /** Editable title shown at the artboard's bottom-right corner. */
+  sheetName: string
   /** Dimmed read-only tracing underlay (carries its own transform), or null. */
   underlay: Underlay | null
   /** Live real-world scale: meters per world unit (1 world unit = 1px @ zoom 1).
@@ -303,11 +312,21 @@ interface DrawingState {
   beginText: (x: number, y: number, screenX: number, screenY: number, id: string | null, initial: string) => void
   commitText: (value: string) => void
   cancelText: () => void
+  /** Delete an entire text label (used by the eraser); records one undo step. */
+  eraseTextLabel: (id: string) => void
+  /** Commit a finished freehand scribble (raster annotation); records one undo step. */
+  addScribble: (points: { x: number; y: number }[], color: string, width: number) => void
+  /** Set the in-progress scribble preview (transient; no undo history). */
+  setLiveScribble: (stroke: ScribbleStroke | null) => void
+  /** Delete an entire scribble (Figma-style whole-stroke erase); records one undo step. */
+  eraseScribble: (id: string) => void
   /** Move a text label (used by the Edit tool drag); no undo history per move. */
   moveText: (id: string, x: number, y: number) => void
   setShowIntentLabels: (show: boolean) => void
   setShowIntentGrid: (show: boolean) => void
   setToolbarPosition: (position: ToolbarPosition) => void
+  /** Rename the current artboard (sheet title). */
+  setSheetName: (name: string) => void
   /** Resize the independent world frame (page sheet) in world units. */
   setPageSize: (width: number, height: number) => void
   /** Place a tracing underlay, fitting the asset's pixels into the page frame.
@@ -362,11 +381,14 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   pendingPin: null,
   textLabels: [],
   pendingText: null,
+  scribbles: [],
+  liveScribble: null,
   showIntentLabels: false,
   showIntentGrid: false,
   toolbarPosition: 'bottom',
   pageWidth: DEFAULT_PAGE_WIDTH,
   pageHeight: DEFAULT_PAGE_HEIGHT,
+  sheetName: 'Central 01',
   underlay: null,
   metersPerWorldUnit: null,
   mapActive: false,
@@ -619,7 +641,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         y: p.y,
         text,
         color: state.strokeColor,
-        size: 16,
+        size: 14,
       }
       return {
         past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
@@ -629,11 +651,47 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       }
     }),
   cancelText: () => set({ pendingText: null }),
+  eraseTextLabel: (id) =>
+    set((state) => {
+      if (!state.textLabels.some((l) => l.id === id)) return {}
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        textLabels: state.textLabels.filter((l) => l.id !== id),
+      }
+    }),
+  addScribble: (points, color, width) =>
+    set((state) => {
+      if (points.length < 1) return {}
+      const stroke: ScribbleStroke = {
+        id: `scribble-${Date.now()}-${scribbleCounter++}`,
+        color,
+        width,
+        points: points.map((p) => ({ x: p.x, y: p.y })),
+      }
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        scribbles: [...state.scribbles, stroke],
+        liveScribble: null,
+      }
+    }),
+  setLiveScribble: (stroke) => set({ liveScribble: stroke }),
+  eraseScribble: (id) =>
+    set((state) => {
+      if (!state.scribbles.some((s) => s.id === id)) return {}
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        scribbles: state.scribbles.filter((s) => s.id !== id),
+      }
+    }),
   moveText: (id, x, y) =>
     set((state) => ({ textLabels: state.textLabels.map((l) => (l.id === id ? { ...l, x, y } : l)) })),
   setShowIntentLabels: (show) => set({ showIntentLabels: show }),
   setShowIntentGrid: (show) => set({ showIntentGrid: show }),
   setToolbarPosition: (position) => set({ toolbarPosition: position }),
+  setSheetName: (name) => set({ sheetName: name }),
   setPageSize: (width, height) =>
     set((state) => {
       const pageWidth = Math.max(1, width)
@@ -842,6 +900,7 @@ function snapshot(state: {
   textLabels: TextLabel[]
   boundary: Boundary | null
   circulationPaths: CirculationPath[]
+  scribbles: ScribbleStroke[]
 }): HistoryEntry {
   return {
     graph: state.graph,
@@ -850,15 +909,17 @@ function snapshot(state: {
     textLabels: state.textLabels,
     boundary: state.boundary,
     circulationPaths: state.circulationPaths,
+    scribbles: state.scribbles,
   }
 }
 
-/** Restore the boundary + circulation portion of a history entry (mask rebuilt). */
+/** Restore the boundary + circulation + scribble portion of a history entry. */
 function restoreFeatures(entry: HistoryEntry) {
   return {
     boundary: entry.boundary,
     circulationPaths: entry.circulationPaths,
     circulationMask: entry.circulationPaths.length ? buildCirculationMask(entry.circulationPaths) : null,
+    scribbles: entry.scribbles,
   }
 }
 
