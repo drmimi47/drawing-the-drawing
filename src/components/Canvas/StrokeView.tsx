@@ -12,7 +12,7 @@ import { buildStrokeGeometry } from './strokeGeometry'
  * without pulling in the live tool hooks DrawingLayer wires up.
  */
 
-export const SELECTION_COLOR = '#2f6fed'
+export const SELECTION_COLOR = '#1f2937'
 
 /**
  * A ribbon for a centerline polyline (smoothed unless `straight`), honoring the

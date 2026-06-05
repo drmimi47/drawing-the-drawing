@@ -1,0 +1,209 @@
+================================================================================
+GRADIA — LLM GENERATION & INTENT LAYER IMPLEMENTATION PLAN
+File: LLM_imp.txt
+Scope: STAGE 5 (Generate / LLM co-resolution) + the Intent Pin layer's role feeding it.
+Status: Planning. Supersedes the Stage-5 notes from the now-removed restructure_v1/v2.
+Audience: Core systems / LLM coding agents.
+================================================================================
+ 
+0. PREMISE
+--------------------------------------------------------------------------------
+The pipeline (Context → Lot Boundary → Hierarchical Circulation → Departments →
+Rooms) is built and produces a DENSE, pre-arranged constraint field. Generation is
+the FINAL synthesis step: a precision CO-RESOLVER over that field, never a blank-
+canvas guesser. Claude receives the fully-constrained plan + the designer's intent and
+returns clean vector geometry that (a) fills under-allocated space, (b) resolves
+remaining openings/seams, and (c) honors every hard constraint already established.
+
+Two layers are in scope:
+  • INTENT PIN layer — already built as UI (pins, blended field, concentration grid,
+    edit/erase). Its REMAINING job is to be serialized as soft guidance for Generate.
+  • GENERATE layer — currently a scaffold ("Coming soon"). To be built end-to-end.
+
+NON-DESTRUCTIVE MANDATE: a generation result is a PROPOSAL. The designer accepts,
+rejects, or accepts-then-edits (Vector Edit), and may re-fire. Nothing is clobbered.
+
+
+1. CURRENT STATE (what exists today)
+--------------------------------------------------------------------------------
+  EXISTS:
+    • src/io/intentSerialization.ts — serializeIntent(graph, pins) → { vertices[],
+      regions[] } each tagged with a 4-channel intentMix (density/pedestrian/sqf/
+      landuse). Pure data prep; calls no model.
+    • Full geometry in the store: boundary, circulationPaths (tier MAIN|MINOR) +
+      main/minor masks, departments (center/radius/color/targetSqf/roomCount),
+      rooms (polygon/areaSqf/parentDeptId/isLocked), lockPolygons, intentPins.
+    • Department area diagnostics (Core/Max SQF) in geometry/departmentAreas.ts.
+    • Vector Edit tool + PSLG graph for post-generation tweaking.
+    • Env-var pattern already in use (VITE_MAPBOX_* read at startup).
+  MISSING:
+    • A full constraint-payload serializer (only intent is serialized today).
+    • api/generate.ts edge function (no api/ dir yet) + model wiring.
+    • Generate-layer store state, action, panel UI, and result rendering.
+    • Reintegration of returned geometry into the live model.
+
+
+2. ARCHITECTURE
+--------------------------------------------------------------------------------
+  CLIENT (browser)                      SERVER (Vercel Edge Function)        MODEL
+  ----------------                      -----------------------------        -----
+  buildGenerationPayload()  ──POST──▶   api/generate.ts                 ──▶  Claude
+  (store → JSON)                        - validate + size-guard              (Messages API)
+                                        - system prompt + payload
+  parse + validate  ◀──JSON────         - parse/repair model JSON      ◀──  JSON coords
+  reintegrate (proposal)                - return typed result
+
+  • The Anthropic API key lives ONLY on the server (Vercel env ANTHROPIC_API_KEY,
+    NOT VITE_-prefixed → never shipped to the browser). The client never holds it.
+  • Model: default `claude-sonnet-4-6` (latency/cost); allow `claude-opus-4-8` for a
+    "high-effort" toggle. Use the Anthropic Messages API with a strict JSON output
+    contract (tool/`response_format`-style or a "return ONLY JSON" system prompt +
+    server-side JSON.parse with one repair retry).
+  • Deployment: Vercel (the repo is Vite/React; add /api as Vercel Functions). Local
+    dev via `vercel dev` or a thin Node/Express shim; document both.
+
+
+3. DATA CONTRACTS  (new file: src/io/generationPayload.ts)
+--------------------------------------------------------------------------------
+  Reuse world coordinates throughout (planar). Round to ~3 dp to bound payload size.
+
+  interface GenerationRequest {
+    units: { metersPerWorldUnit: number | null }   // null ⇒ world units²
+    parcelBoundary: { ring: [number,number][]; areaSqf: number }
+    circulation: {
+      main:  { id; centerline:[number,number][]; width:number }[]
+      minor: { id; centerline:[number,number][]; width:number }[]
+    }
+    lockedAreas: { id; ring:[number,number][] }[]              // geometry/locks.ts
+    departments: {
+      id; name; center:[number,number]; radius:number; color
+      targetSqf?: number
+      coreSqf: number; maxSqf: number                          // departmentAreas.ts
+      intentMix: IntentMix                                     // sampled at center
+    }[]
+    rooms: { roomId; parentDeptId; polygon:[number,number][]; areaSqf; isLocked }[]
+    intent: IntentSerialization                                // existing serializeIntent
+    brief?: string                                             // free-text designer prompt
+  }
+
+  interface GenerationResponse {
+    rooms?:        { parentDeptId; polygon:[number,number][]; areaSqf?; note? }[]
+    circulation?:  { tier:'MAIN'|'MINOR'; centerline:[number,number][]; width? }[]
+    annotations?:  { x:number; y:number; text:string }[]       // rationale pins
+    summary?:      string
+  }
+
+  buildGenerationPayload(state) → GenerationRequest  (extends serializeIntent;
+  pulls boundary/circulation/departments/rooms/locks; computes areas once).
+
+
+KEY STRATEGY — TOPOLOGY OVER RAW COORDINATES  (carried from agent_implementation_plan.txt)
+--------------------------------------------------------------------------------
+ANTI-PATTERN: streaming raw floating-point coordinates to/from the model exhausts the
+token window and causes "geometric fracturing" (coordinate hallucination). Minimize it.
+
+SERIALIZE SEMANTIC TOPOLOGY, NOT JUST PHYSICAL COORDS: alongside the §3 geometry, export
+the abstract relationships the model reasons over — regional enclosure / adjacency /
+contents — e.g.:
+    "Region_A": { "enclosedBy":["V1","V2","V3"], "pinsInside":["density-1"],
+                  "neighbors":["Region_B"], "bbox":[...], "targetSqf":... }
+Tag every vertex/region with its lock-influence zone + intentMix so constraints read
+relationally, not as a coordinate dump.
+
+LOCK-INFLUENCE ZONES  (geometry/locks.ts → lockInfluenceAt) — encode in the prompt:
+    LOCKED      influence = 1.0   → fixed anchors; MUST NOT move
+    TRANSITION  0 < inf < 1       → feather zone; bend / attach new geometry here
+    OPEN        influence = 0     → free to generate
+(metersPerWorldUnit already supplies real-world scale context.)
+
+PARAMETRIC RETURN + LOCAL LAYOUT INTERPRETER (robust target design): prefer Claude
+returning STRUCTURED PARAMETERS / generative rules (structural + layout params, density
+distributions) over raw vertices. A local, DETERMINISTIC TypeScript layout engine then
+interprets those rules — combined with the lockInfluence matrix — and writes
+mathematically exact vertices/lines back into the PSLG graph. This is what guarantees
+precision and dodges token / hallucination limits.
+
+PHASING (the agent plan flagged this deep refactor "hold off until specified"): the §3
+GenerationResponse coordinate contract is the SIMPLE first cut (clip + validate hard on
+merge). The parametric-return + layout-interpreter above is the production target —
+adopt it when the loop is specified. §4 passes hold either way; it slots into G2's
+response schema and G4's reintegration. Already in place to build on: serializeIntent
+(intentMix payload), lockInfluenceAt (zone partition), metersPerWorldUnit (scale).
+
+
+4. IMPLEMENTATION PASSES (ordered; each shippable + tsc-clean)
+--------------------------------------------------------------------------------
+  G1  PAYLOAD SERIALIZER  [risk: low]
+      • src/io/generationPayload.ts: buildGenerationPayload(DrawingState) per §3.
+      • Unit test the shape against a sample store; assert size < ~256 KB (decimate
+        long polylines if over budget).
+      EXISTS: serializeIntent, departmentAreas. NEW: the composite serializer.
+
+  G2  EDGE FUNCTION  [risk: med]
+      • /api/generate.ts (Vercel). Accept GenerationRequest; build the system prompt
+        (role = architectural co-resolver; HARD rules = stay in boundary, never cross
+        MAIN circulation, respect lockedAreas + isLocked rooms; SOFT = intentMix,
+        target deltas); call Claude; parse to GenerationResponse with one repair pass;
+        return typed JSON + status. Guard: timeout, max tokens, payload size, rate.
+      • Env: ANTHROPIC_API_KEY (server). Add .env.example entry + a thin client in
+        src/io/generateClient.ts (fetch wrapper, ab/timeout, error mapping).
+      RISK: prompt design + reliable JSON. Mitigate with explicit schema + examples.
+
+  G3  STORE + GENERATE ACTION  [risk: low]
+      • store: generationStatus:'idle'|'running'|'done'|'error', generationError,
+        generationProposal: GenerationResponse | null, generationBrief: string.
+      • action generate(): build payload → POST → set proposal; abortable.
+      • CanvasDoc: proposal is transient (NOT persisted per board); brief may persist.
+
+  G4  REINTEGRATION + ITERATE  [risk: med]
+      • Render the proposal as a PREVIEW overlay (dashed/ghosted) on the Generate
+        layer, visually distinct from committed geometry.
+      • Accept → merge returned rooms/circulation into the live model (new room nodes
+        keep parentDeptId; new circulation re-derives masks; never overwrite isLocked
+        rooms or lockedAreas). Reject → discard. Accept-then-edit → Vector Edit, re-fire.
+      • One undo step per accept (snapshot before merge).
+
+  G5  GENERATE-LAYER PANEL UI  [risk: low]
+      • RightPanel GenerateControls: brief textarea, "Generate" button (disabled until
+        boundary closed), high-effort (Opus) toggle, status/spinner, error surface,
+        Accept / Reject / Re-generate. Show response.summary + annotation count.
+      • Ribbon: GENERATE layer stays PAN-only (panel-driven), remove from NOT_YET.
+
+
+5. INTENT PIN LAYER — generation role (mostly built; finish the wiring)
+--------------------------------------------------------------------------------
+  DONE: pins, blended multi-channel field, concentration grid, edit/erase, magenta
+        cross-layer references, serializeIntent (vertices + field-boundary regions).
+  TO DO for generation:
+    I1  Include intent in the payload (done via §3 `intent`); also sample intentMix at
+        each department center (soft program-fit signal) and optionally per room.
+    I2  (optional) Per-department intent metadata: let a department inherit/override an
+        intent emphasis so Generate weights program by zone (restructure OPEN item).
+    I3  Confirm intent regions (marching-squares rings) are decimated before payload.
+  PRINCIPLE: intent is ALWAYS soft guidance — it biases Generate, never a hard gate.
+  Hard gates remain boundary, MAIN circulation, lockedAreas, isLocked rooms.
+
+
+6. SECURITY / OPS
+--------------------------------------------------------------------------------
+  • ANTHROPIC_API_KEY server-only (Vercel env); never VITE_-prefixed; never logged.
+  • Validate + clamp payload server-side; reject oversized/malformed requests.
+  • No PII; geometry only. Rate-limit the endpoint. Surface model errors to the user
+    without leaking internals. Add URL/key restrictions before any public deploy.
+
+
+7. ACCEPTANCE CRITERIA
+--------------------------------------------------------------------------------
+  • From a complete plan, "Generate" returns a proposal in one round trip; the preview
+    renders; Accept merges geometry non-destructively (one undo step); Re-fire works.
+  • Returned geometry never violates a HARD constraint after reintegration (clip on
+    merge as a safety net). isLocked rooms + lockedAreas survive untouched.
+  • Key never reaches the client bundle (grep the build output to confirm).
+
+
+8. ORDERING & DEPENDENCIES
+--------------------------------------------------------------------------------
+  G1 → G2 → G3 → G5 (usable round-trip) → G4 (reintegration) ; I1 rides in G1,
+  I2/I3 optional polish. Ship G1–G3+G5 first for an end-to-end "generate + view
+  proposal" loop, then G4 to make it editable/mergeable.
+================================================================================

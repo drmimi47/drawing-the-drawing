@@ -1,688 +1,315 @@
-GRADIA DRAW — Project Information Document
+GRADIA DRAW — Project Information
 ================================================================================
-Purpose: Onboarding reference for collaborators and LLM coding agents. Describes
-the project's intent, technical architecture, and complete current feature set.
-Last updated: 2026-06-03 (multi-board design options; per-tool contextual bar;
-              ribbon Color/Pen removed; per-board layer memory + global undo)
+Onboarding reference for collaborators and LLM coding agents: intent, architecture,
+and current feature set. Concise by design — see the source + memory notes for depth.
+Last updated: 2026-06-05 (geodesic department fields; room editing + multi-grid room
+              clustering; department program types; 85% unlock; DEPARTMENT GRAIN drives
+              rooms; per-room LOCKING; standalone Intent layer PARKED)
 ================================================================================
- 
 
-WHAT THIS PROJECT IS
---------------------
-Gradia Draw is a web-based sketch-to-plan ideation tool for architects and
-urban designers. It is NOT a diffusion-based image renderer. It is a precision
-vector drawing environment where the designer retains fine-grained authorial
-control over every line segment, and an LLM is used as a downstream co-resolver —
-not a first-pass guesser.
 
-The core workflow is linear but non-modal:
+WHAT IT IS
+----------
+Gradia is a web sketch-to-plan ideation tool for architects/urban designers — a
+precision VECTOR environment (not a diffusion image renderer). The designer keeps
+authorial control over every segment; an LLM is a downstream co-resolver (Phase 2).
 
-  IMPORT → SKETCH → NORMALIZE → PIN → GENERATE (Phase 2, deferred)
-
-At each stage the designer can return to any prior stage without destructive loss.
-The graph is always editable; generation emits vectors back into the same graph.
-
-The tool is designed to outperform raw AI image generation for architectural
-ideation because the designer spatially encodes programmatic intent through Pins
-before generation runs. Without this spatial metadata the LLM has no finer
-resolution of intent than a generic text prompt — the Pins are what make the
-output controllable and site-specific.
+It is built as a CONSTRAINT-ACCUMULATING PIPELINE of layers. Constraints only tighten
+as you move down the stack; you can revisit any layer non-destructively, and derived
+geometry (rooms) re-flows automatically.
 
 
 TECH STACK
 ----------
-- TypeScript 5, React 18, Vite 5
-- Zustand 5 — global state store (graph + tool state + transient UI flags)
-- React Three Fiber (R3F) + Three.js 0.169 — all drawing is WebGL, orthographic
-  camera (1 world unit = 1 px at zoom 1)
-- Custom GLSL shaders: metaball multi-channel concentration overlay,
-  marching-ants selection outline
-- @react-three/drei — Html utility for world-anchored DOM labels
-- Mapbox GL JS 3 + @mapbox/mapbox-gl-draw + mapbox-gl-draw-snap-mode —
-  geospatial overlay (lazy-loaded; never in main bundle)
-- @turf/turf 7 — real-world area/length/coordinate calculations
-- pdfjs-dist 4 — PDF first-page rasterization (dynamic import)
-- jsPDF — vector PDF export (dynamic import)
-- lucide-react — icons
-- Deployment: Vercel (Phase 2 adds a serverless Edge Function for LLM proxying)
+- TypeScript 5, React 18, Vite 5, Zustand 5 (store)
+- React Three Fiber + Three.js 0.169 — all drawing is WebGL, orthographic camera
+  (1 world unit = 1 px at zoom 1). Custom GLSL for field overlays + marching ants.
+- @react-three/drei (Html labels), @turf/turf 7 (polygon booleans, area/length),
+  Mapbox GL JS 3 (lazy geospatial underlay), pdfjs-dist + jsPDF (import/export),
+  lucide-react (icons). Deploy: Vercel.
+- Tests: Vitest (`npm test`) + jsdom — unit/integration for geometry, store, and the
+  edit hooks. 7 suites today (department field, room edit, multi-grid rooms, room
+  defaults, department types, edit pipeline, dept-drag hook).
 
 
-DATA MODEL (Source of Truth)
-----------------------------
-All geometry is a Planar Straight-Line Graph (PSLG). Renders are a derived cache
-— never the source of truth.
-
-  RawSample    { x, y, pressure: 0, t }              pointer stream (pressure ignored)
-  Vertex       { id, x, y }                           shared at stroke intersections
-  PathPoint    { v: vertexId, w: number }             per-stroke half-width reference
-  Stroke       { id, color, path: PathPoint[],
-                 raw?: RawSample[], straight?: bool } ordered path through vertices
-  Edge         { id, strokeId, v0, v1 }               derived from strokes
-  Graph        { vertices: Record<id,Vertex>,
-                 strokes: Stroke[] }                  single source of truth
-  LockPolygon  { id, points: {x,y}[], featherRadius } lock region (rectangle)
-  IntentPin    { id, x, y, radius, intentType }       spatial prompt pin
-  TextLabel    { id, x, y, text, color, size }        free-floating annotation
-  Underlay     { src, opacity, pixelWidth, pixelHeight,
-                 x, y, width, height }                raster import with own transform
-  CanvasEntry  { id, origin: {x,y} }                  a board's identity + world offset
-  CanvasDoc    { graph, lockPolygons, intentPins,     ONE board's full document:
-                 textLabels, scribbles, boundary,      geometry + per-board layer
-                 circulationPaths, underlay,           pipeline state (activeLayer,
-                 pageWidth, pageHeight, sheetName,      maxLayerReached, context, grid,
-                 activeLayer, maxLayerReached,          infill/corridor settings, map
-                 context, gridType, gridSpacing, … }   state). Active board = live
-                                                       store fields; inactive boards
-                                                       held in inactiveCanvasDocs.
-  HistoryEntry { activeDoc: CanvasDoc, activeCanvasId, undo/redo unit — the WHOLE
-                 canvases, inactiveCanvasDocs }         multi-board world (global stack)
-  SnapGuide    { type: 'endpoint'|'perpendicular'|    transient CAD snap guide
-                 'parallel'|'extension'|'edge',        (polyline Smart Track);
-                 fromPoint: [x,y], toPoint: [x,y],     lives in store.activeSnapGuide,
-                 sourceEdgeId?, sourceVertexId? }      NOT part of undo history
-
-World coordinate system: origin (0,0) at the CENTRAL board's page center, y-axis up,
-right-handed. Additional boards sit at world-space offsets; their geometry is stored
-in absolute world coords near their own origin (see MULTI-BOARD).
-Export flips y: fx(x) = x + W/2, fy(y) = H/2 - y (top-left origin, y down).
-(Export currently serializes only the ACTIVE board.)
-
-The page sheet is an INDEPENDENT world frame: its size (pageWidth/pageHeight,
-default 1080×720) is NEVER altered by imports. setPageSize() controls it
-explicitly (re-fits any active underlay). An imported asset becomes an Underlay
-carrying its own placement transform (centered, aspect-fit to 92% of the page
-frame), so assets can be swapped without disturbing the coordinate system.
-
-A real-world scale (metersPerWorldUnit) is held in the store: null until
-calibrated by the active Mapbox projection, then updated live on every map
-move/zoom via Web Mercator ground resolution math.
-
-
-RENDERING PIPELINE
-------------------
-Three tiers, rebuilt from the graph on demand:
-
-  Tier 1 — Raw samples:  stored on Stroke for future re-analysis
-  Tier 2 — Graph:        Vertex + PathPoint source of truth
-  Tier 3 — Mesh:         centripetal Catmull-Rom resampled centerline →
-                         uniform-width triangle ribbon (averaged-tangent normals,
-                         round end-caps, 16-step half-disk fans)
-
-Strokes are UNIFORM thickness (pressure sensitivity deliberately removed).
-Polylines use buildPolylineRibbon — sharp miter/bevel corners, no spline.
-An invisible viewport-following InteractionPlane (useFrame resizes it each tick)
-receives all raycasts, giving world-space pointer coords that survive pan/zoom.
-
-RibbonMesh reuses one BufferGeometry instance as its data updates (live draw /
-polyline preview / vertex drag). Three.js caches a geometry's boundingSphere on
-first cull and never refreshes it, so a continuously-updated mesh kept a stale
-sphere and was wrongly frustum-culled when zoomed in (small frustum) — the preview
-vanished mid-draw until commit. Fix: RibbonMesh recomputes the bounding sphere in a
-useLayoutEffect on every geometry change, so culling stays correct (and stays ON
-for the many static committed strokes) without disabling it scene-wide.
-
-Lineweights & line styles (drafting hierarchy, improvements C3): styling lives on
-the Stroke (the persistent drawable), NOT on derived Edges — deriveEdges()
-regenerates edges every call, so they cannot retain metadata. A Stroke carries
-optional strokeWidth (world units; falls back to 2× path half-width) and lineStyle
-('solid' | 'dashed' | 'long-dash' | 'dotted'; absent ⇒ solid). The active pen
-(store.baseWidth + store.lineStyle, set via the toolbar Pen dropdown — LINEWEIGHTS
-presets Fine/Standard/Bold/Thick + the four styles) is stamped onto each new stroke
-at commit. buildStrokeGeometry() routes solid strokes straight through the smooth
-or polyline ribbon builder; for dashed/dotted it walks the centerline by cumulative
-arc length (dashArray() returns [on, off] in WORLD units, proportional to width so
-the pattern stays balanced at any weight and zoom), interpolating a boundary point
-at each dash edge, builds one ribbon per "on" run, and merges them into one mesh.
-The SAME dashArray() drives the SVG (stroke-dasharray), PNG (ctx.setLineDash) and
-PDF (setLineDashPattern) exporters, so screen and file output match. Style fields
-are preserved through erase and lasso/lock re-segmentation so they survive editing.
-
-
-SPATIAL INDEX & SNAPPING ENGINE
----------------------------------
-src/geometry/spatialIndex.ts — SpatialGrid: a uniform spatial hash grid (64-unit
-cells). Two snap target types are indexed:
-
-  VERTEX   — every graph vertex. Because the PSLG inserts a shared vertex at every
-             stroke crossing, this automatically covers intersections, endpoints,
-             and any manually placed node — no separate intersection index needed.
-  MIDPOINT — the midpoint of every derived edge (one per consecutive PathPoint pair
-             in each stroke). Computed as (v0 + v1) / 2 at index time.
-
-Storage: the grid stores topology + position (not pre-baked SnapPoints), so it
-can be edited incrementally. String-keyed Maps key on "cx:cy" = floor(coord/cell):
-  cellVerts   cellKey -> Set<vertexId>   verts whose position lands in the cell
-  cellEdges   cellKey -> Set<edgeKey>    edges whose SEGMENT passes through the cell
-  vertexPos   vertexId -> {x,y}          live positions
-  vertexCell  vertexId -> cellKey        reverse lookup (a vertex is in one cell)
-  edges       edgeKey  -> [v0,v1]        endpoint ids
-  edgeCells   edgeKey  -> Set<cellKey>   reverse lookup (every cell an edge occupies)
-  vertexEdges vertexId -> Set<edgeKey>   adjacency (moved vertex -> its edges)
-
-SEGMENT-CELL INTERSECTION INDEXING (Cluster 1, long-edge blind-spot fix): edges
-are bucketed into EVERY cell their segment traverses, not just the cell holding
-their midpoint. Previously a long wall whose endpoints sat many cells from its
-midpoint was invisible to the 3×3 nearbyEdgeEndpoints() query everywhere except
-near its center, so edge snapping died along most of its length. Cell coverage is
-computed by a supercover voxel traversal (Amanatides & Woo) in edgeCellKeys(),
-walking cell-boundary crossings in parameter order so no cell is skipped even on
-long near-axis lines; iteration is bounded by the Manhattan cell distance between
-endpoints. refreshEdgeCells() recomputes an edge's cell set and re-buckets only
-the diff (cells left vs. entered), keeping the drag hot path cheap. The midpoint
-lies ON the segment, so its cell is always among the traversed cells — nearest()'s
-MIDPOINT snap is unaffected (it distance-tests the true midpoint and de-dupes
-edges that appear in several cells of the query block).
-Query scans a (2R+1)² block of adjacent cells (minCx..maxCx × minCy..maxCy),
-touching only the cells that can possibly hold a point within radius R — O(1)-ish
-vs. O(n) full scan. For typical SNAP_THRESHOLD_PX/zoom ≈ 8–40 world units and
-cell=64, the query block is 1–4 cells in each axis. SnapPoints are materialized
-lazily, only for the winning candidate, so per-query allocation is ~zero.
-
-Lifecycle (incremental, improvements C2): the grid is no longer wiped and rebuilt
-on every mutation. The drag hot path (setVertexPositions) calls grid.moveVertex
-per moved vertex, which re-buckets just that vertex and the midpoints of its
-incident edges (O(incident) cells) IN PLACE — so dragging one vertex among
-thousands stays 60 FPS. Topology changes still rebuild from scratch, routed
-through one seam: setVertexPositions preserves the graph.strokes array reference,
-while every topology-changing action (stroke commit, polyline finish, erase,
-lasso/lock segmentation, undo, redo, clear) produces a NEW strokes array. The
-Zustand subscribe() therefore rebuilds only when state.graph.strokes !==
-prev.graph.strokes — an O(1) test that skips the rebuild for position-only moves
-(already indexed incrementally) yet auto-covers any edge-set change with zero
-per-action boilerplate. Incremental methods: addVertex / moveVertex /
-removeVertex / addEdge / removeEdge; empty buckets and dead adjacency sets are
-pruned on removal so no stale ids linger.
-
-nearest(x, y, radius, exclude?) query:
-  - Scans overlapping grid cells, maintains two separate best candidates:
-    bestVertex (closest VERTEX within r²) and bestMid (closest MIDPOINT within r²).
-  - Returns bestVertex if found, otherwise bestMid — VERTEX always takes priority,
-    even when a midpoint is geometrically closer (endpoint snap is the stronger
-    intent; mirrors AutoCAD/Revit snap priority).
-  - exclude: Set<vertexId> — skips any target whose vid (VERTEX) or either edge
-    endpoint (MIDPOINT) is in the set. Used by Vector Edit so a dragged vertex
-    cannot snap to itself or to midpoints of its own edges.
-
-Snap threshold: SNAP_THRESHOLD_PX = 8 (screen pixels) ÷ camera.zoom → world
-units. Converts the activation radius into world space so the snap zone stays
-visually constant as the user zooms in or out.
-
-nearbyEdgeEndpoints(x, y) query (added for the CAD snap pipeline):
-  Returns every edge whose segment passes through the 3×3 cell block around (x, y)
-  as { key, a, b } (live endpoint position refs), de-duplicated across the block.
-  Thanks to segment-cell indexing this now includes long edges that merely pass
-  NEAR the cursor (e.g. the far end of a wall), not just edges whose midpoint is
-  local. This is the small candidate set the polyline pipeline evaluates for
-  perpendicular / parallel / edge snaps — O(1) cell lookups, never a full-graph
-  scan. Caller reads the refs synchronously in-frame.
-
-CAD GEOMETRIC MATH (src/geometry/snapMath.ts):
-  Pure, side-effect-free 2D world-space functions; every one guards degenerate
-  (zero-length / coincident) input by returning null (or the anchor) rather than
-  dividing by zero. EPS = 1e-10.
-    getProjectedPointOnLine(M, A, B) — foot of perpendicular from M onto the
-      INFINITE line through A,B (returns A when A≈B); powers extension snap.
-    getLinesIntersection2D(A, B, C, D) — crossing of the two INFINITE lines A→B
-      and C→D; null when parallel/colinear (|cross of dirs| < EPS). The point can
-      lie far off both segments (apparent intersection), so the caller gates by
-      cursor proximity. Powers intersection snap.
-    nearestPointOnSegment(M, A, B) — closest point on the FINITE segment A–B
-      (clamped to endpoints) + its distance to M; powers edge snap.
-    snapOrtho(anchor, p) — locks p to the H or V axis through anchor (whichever
-      displacement is larger); shared by polyline Shift-ortho and Edit Shift-drag.
-    checkParallelSnap(P, M, A, B, angularThresholdRad) — is vector P→M nearly
-      parallel OR anti-parallel to edge A→B? Test is |cross(d̂, v̂)| = |sin θ| ≤
-      sin(threshold) (symmetric about 0° and 180°, no atan2). If so, returns M
-      projected onto the parallel ray from P; else null.
-    checkPerpendicularSnap(P, M, A, B, distanceThreshold) — builds the line
-      through P perpendicular to A→B (90°-rotated unit dir), projects M onto it,
-      and returns that foot iff |M − foot| ≤ distanceThreshold; else null.
-
-Active tools:
-  Polyline (usePolyline.ts) — the CAD snap pipeline (resolveSnap, a module-level
-    pure fn that reads spatialIndex via getState(), never during render). On every
-    pointer move AND every click it runs a sequential priority matrix; the first
-    hit wins, overrides the raw cursor with the snapped coordinate, and writes
-    store.activeSnapGuide (or clears it to null):
-      P1 ENDPOINT  — a true VERTEX in range: nearest committed graph vertex (index
-                     hit of kind VERTEX) OR an in-progress polyline vertex within
-                     SNAP_THRESHOLD_PX/zoom; locks exactly. Guide type 'endpoint'
-                     (green □), emitted even on the very first placed point.
-      P2 MIDPOINT  — its own tier (Cluster 2): when no vertex was in range, an edge
-                     MIDPOINT index hit within SNAP_THRESHOLD_PX/zoom owns the
-                     cursor and locks to the exact edge centre. Guide type 'midpoint'
-                     (green △). The index returns VERTEX-over-MIDPOINT, so a nearby
-                     vertex always pre-empts the midpoint (CAD object-snap priority).
-      P3 INTERSECTION — (Cluster 3) for each pair of nearby committed edges, the
-                     crossing of their INFINITE lines (getLinesIntersection2D); if
-                     that virtual point is within SNAP_THRESHOLD_PX/zoom of the
-                     cursor, lock to it — anchoring where two walls WOULD meet even
-                     before they touch. Always active; the cursor-proximity gate
-                     stops far crossings hijacking the cursor. O(n²) over the tiny
-                     local set. Guide type 'intersection' (green ✕).
-      P4 PERPENDICULAR — over candidate edges, the segment P→M forms 90° with an
-                     edge within (SNAP_THRESHOLD_PX·2.5)/zoom of its perp-line
-                     through P; locks M to that foot. Closest foot wins.
-      P5 PARALLEL  — over candidate edges, P→M runs within 6° of an edge; projects
-                     M onto the parallel ray from P. Smallest angular deviation
-                     (|sin θ|) wins.
-      P6 EXTENSION — (Cluster 3) with ≥2 placed vertices, projects the cursor onto
-                     the INFINITE line through the last segment (P_prev→P); if it's
-                     within SNAP_THRESHOLD_PX/zoom of that line, locks on so the next
-                     segment continues exactly collinear. Guide type 'extension'
-                     (dashed track along the trajectory; from = P_prev for a stable
-                     direction). Governs the cursor's own trajectory, so it sits
-                     below perp/parallel (which express intent against OTHER edges).
-      P7 TRACKING  — object-snap tracking / O-TRACK. Anchors (store.trackedPoints,
-                     ≤2) are acquired by hovering a committed vertex/midpoint for
-                     ACQUIRE_MS (400ms; a stable-hover timer in usePolyline keyed off
-                     the won snapTarget's vid/edge). Moving away, the cursor's x locks
-                     to the nearest anchor x and/or its y to the nearest anchor y
-                     within SNAP_THRESHOLD_PX/zoom — two anchors ⇒ lock to their
-                     (T1.x, T2.y) intersection. Guide type 'tracking'; visuals owned
-                     by TrackingOverlay. Below the object snaps (aligns to remembered
-                     points, not geometry under the cursor), above raw edge snap.
-      P8 EDGE      — nearest point on a nearby COMMITTED edge within
-                     SNAP_THRESHOLD_PX/zoom (nearestPointOnSegment). Always active
-                     (no session required) so a polyline can start or continue
-                     EXACTLY on an existing line — landing on the span between
-                     vertices to share it instead of near-missing. The hot zone is
-                     kept tight (= the endpoint radius) so floating parallel-adjacent
-                     to a long wall doesn't feel magnetized. Lowest priority, so all
-                     higher tiers still win. Guide type 'edge'.
-    P4/P5/P6 require an active session (≥1 placed vertex; P6 needs ≥2) and are
-    GUARDED so they never run in the freehand Draw path. Critically, the perp/parallel
-    candidate edge set is nearbyEdgeEndpoints() PLUS every segment of the IN-PROGRESS
-    polyline (and in-progress vertices are P1 candidates) — so snapping engages
-    mid-draw against the line you are currently drawing, not only against
-    already-committed strokes. Intersection (P3) and edge (P8) use committed edges
-    only (snapping onto the in-progress rubber band would fold it back on itself).
-    O-TRACK anchors (P7) are per-path: cleared on finish/cancel (reset) and on
-    leaving the polyline tool (setTool); acquisition runs only while snapping is on.
-    Every snap sets isAdvanced=true, so
-    Shift-ortho is suppressed whenever ANY snap is live (the geometric anchor wins);
-    it only applies on the open-space fallback. Per-frame moves are coalesced through one
-    requestAnimationFrame; activeSnapGuide is flushed there and cleared on reset /
-    tool switch. NOTE: snapping places points at EXACT existing coordinates but does
-    not yet topologically MERGE them (commit still mints fresh vertex ids; only
-    proper interior crossings split — see addStrokeToGraph). True shared-node /
-    edge-split on coincident-or-on-edge placement is a follow-up.
-  Vector Edit (useVectorEdit.ts) — probes nearest() on every pointer move while
-    dragging a vertex, excluding that vertex and its own edges via the exclude set.
-    Applies the snapped position to setVertexPositions so connected strokes update
-    live. Holding Shift locks the drag to a horizontal/vertical axis from the grab
-    origin (dragOriginRef captured on grab; snapOrtho applied) — object snap still
-    wins when a target is in range, mirroring the polyline tool. Shift state is read
-    live off the pointer-move event. (Vector Edit keeps the legacy blue
-    SnapIndicator; Polyline's visuals are owned entirely by the Smart Track overlay
-    below.)
-
-SnapIndicator (components/Canvas/SnapIndicator.tsx):
-  A lineLoop built once as a unit outline (half-extent = 1) and rescaled by
-  HALF_PX (6px) / camera.zoom each frame via useFrame. Screen-constant physical
-  size regardless of zoom level. Two shapes:
-    SQUARE  (□) — 4-vertex lineLoop — for VERTEX / endpoint targets
-    TRIANGLE (△) — 3-vertex lineLoop — for MIDPOINT targets
-  renderOrder 40, depthTest false, frustumCulled false — always on top.
-  Now used ONLY by the Vector Edit drag (Polyline snaps render via SnapGuideOverlay,
-  so the blue square doesn't double up with the green endpoint glyph).
-
-SnapGuideOverlay — "Smart Track" guides (components/Canvas/SnapGuideOverlay.tsx):
-  Reads store.activeSnapGuide and renders professional CAD alignment cues for the
-  Polyline tool; renders nothing (clears instantly) when the guide is null. Lives
-  inside the R3F scene graph, so all guides track pan/zoom; everything is sized in
-  screen pixels (÷ camera.zoom each frame) so it stays crisp at any zoom/altitude.
-  Per guide type:
-    endpoint      — hollow green square at the snapped vertex (no track line).
-    midpoint      — hollow green triangle at the exact edge centre (no track line).
-    intersection  — green ✕ at the (apparent) crossing of two lines (no track line).
-    edge          — hollow green diamond on the existing line (no track line).
-    perpendicular — bright green dashed line BOUNDED last-vertex→cursor + a right-
-                    angle ∟ glyph oriented to the guide direction.
-    parallel      — magenta dashed line EXTENDED far past both ends (reads as an
-                    infinite alignment track) + a parallel ∥ glyph.
-    extension     — green dashed track EXTENDED far past both ends along the last
-                    segment's trajectory (collinear continuation guide).
-  Dashes are screen-constant via a ShaderMaterial: a per-vertex lineDistance
-  attribute accumulates world distance, the vertex shader multiplies by uZoom, and
-  the fragment shader discards gap fragments (DASH_PX/GAP_PX = 4/4) — same trick as
-  MarchingAntsLine. DashedGuideLine takes an `extend` flag (false = bounded to
-  from→to for perpendicular, true = ±EXTENSION_PX beyond both ends for parallel).
-  GUIDE_Z = 6, renderOrder 35–36, depthTest false, frustumCulled false.
-
-
-ISOLATED METABALL INTENT FIELD SYSTEM
+THE LAYER PIPELINE (the core workflow)
 --------------------------------------
-src/utils/metaballField.ts — All math uses the Wyvill soft-object falloff:
-  potential = (1 - d²/r²)³   for d < pin.radius,  else 0
+The right-panel Layer Hierarchy is the app's spine (LAYER_ORDER). Switching a layer
+sets its default tool and gates which tools are enabled (Ribbon LAYER_ENABLED_TOOLS);
+each board remembers its own layer state. Sequential unlock (maxLayerReached).
 
-  evaluatePinField(x, y, type, pins):
-    Filters to the targeted IntentType only (strict per-type isolation — a
-    Density pin NEVER bleeds into the Pedestrian field). Sums Wyvill potentials.
+  0 CONTEXT      Choose a substrate: MAP (Mapbox underlay, sets real-world scale) or
+                 BLANK (white sheet + optional grid). Pan only.
+  1 LOT BOUNDARY Trace the closed lot ring (the master work area). Optional target
+                 area (advisory delta + area lock). A structural GRID is fit to the
+                 lot edges here; drawing open polylines = SEAMS that split the lot into
+                 regions, each with its own best-fit grid orientation (geometry/lotGrid).
+  2 CIRCULATION  Draw hallway centerlines, each tagged MAIN or MINOR (per-tier widths).
+                 MAIN = hard wall (splits the lot, blocks department fields + rooms);
+                 MINOR = permeable (fields/rooms flow across, hallway carved out at the
+                 end). Bands cached as ring arrays; point-in-any-band keep-out.
+  3 DEPARTMENTS  Drop program "pins" (soft fields). Each is placed center → TYPE popup
+                 → drag radius. The type also seeds a GRAIN. See DEPARTMENT FIELDS below.
+  4 ROOMS        Parametric: each department subdivides by GRAIN (open-plan ⟷ cellular).
+                 Lock rooms you like; the rest reflow around them. See ROOMS below.
+  6 GENERATE     Phase 2 (deferred) — LLM co-resolves the constrained sketch.
 
-  getIntentConcentration(x, y, pins) → { total, fields, mix }:
-    Runs evaluatePinField for all 4 types. total = sum. mix = normalized ratios
-    (sums to exactly 1 where total > 0 — 100% of local planner intent allocated).
+  PARKED: the standalone INTENT layer (abstract Density/Pedestrian/SQF/Landuse pins that
+  only fed the deferred LLM) is removed from the navigator — "intent" now lives inside each
+  department as its GRAIN, which drives rooms directly with no model call. The intent code
+  (intentSerialization, metaballField, MetaballOverlay, IntentPin type/store slice) stays
+  DORMANT for a future Generate pass; re-add the layer row in RightPanel LAYERS to revive it.
 
-  getRegionConcentration(minX, minY, maxX, maxY, pins) → IntentConcentration:
-    3×3 supersample of a cell, averages absolute fields before taking ratios.
-    Yields the true area-weighted composition (same as what the LLM reads per
-    region). Averaging fields-then-dividing is mathematically correct;
-    averaging ratios would not be.
-
-src/components/Canvas/MetaballOverlay.tsx — GPU visualization:
-  A single full-coverage plane over the pins' AABB. Fragment shader (highp float
-  — required for world coords up to ~10³ and d² up to ~10⁶ which overflow mediump
-  ~65504) evaluates all 4 isolated fields per fragment via the Wyvill formula,
-  then blends brand colors by relative concentration: green+purple overlap →
-  teal-purple mix. Alpha tracks absolute total strength. VIS_THRESHOLD = 0.15
-  drops background fragments.
-  Pin streaming (improvements C1): pins are no longer passed as flat uniform
-  arrays (which hard-capped the scene at 64 pins). They are packed one RGBA float
-  texel per pin — rgba = (x, y, radius, typeIndex) — into a THREE.DataTexture
-  (RGBAFormat / FloatType, Nearest min+mag filter), TEX_WIDTH = 256 texels/row,
-  height grown by row on demand. The shader is GLSL ES 3.0 (glslVersion GLSL3) so
-  the field loop can use the runtime bound `uTotalPins`; it decodes texel i at
-  uv = ((i%W)+0.5)/W, (floor(i/W)+0.5)/H and samples it. No fixed cap — thousands
-  of pins render in one draw call. Pin mutations only rewrite the texture's
-  Float32Array and flip needsUpdate (no shader recompile); the texture is grown
-  grow-only and disposed on unmount so rapid mutations never leak GPU memory.
-
-src/components/Canvas/IntentConcentrationGrid.tsx — Hover inspection overlay:
-  Triggered by showIntentGrid (set when hovering the Intent Pin ribbon button).
-  Discretizes the AABB into 56-unit world cells, calls getRegionConcentration per
-  cell, renders cell outlines as lineSegments (world space, tracks pan/zoom) and
-  % labels as drei Html DOM nodes. Displays only cells with total >= VIS_THRESHOLD.
-  Each label shows short codes (D/P/S/L) + rounded percentage, colored by type,
-  sorted by dominance. The data is the exact mix the Phase-2 serializer reads.
-
-src/utils/marchingSquares.ts — Generic 16-case marching squares:
-  Samples a scalar field over a regular grid, emits line segments per cell via the
-  full 16-case lookup table (explicit saddle handling for cases 5 and 10), then
-  stitches loose segments into closed rings by endpoint matching (quantized to
-  avoid float mismatch). Generic — takes any (x, y) → number field.
-
-src/utils/intentContours.ts — Per-type isoline extraction:
-  extractIntentContours(pins) runs marchingSquares INDEPENDENTLY per IntentType
-  at INTENT_ISO_LEVEL = 0.15 (= shader VIS_THRESHOLD, so rings align with the
-  visible field edge). Returns per-type closed Ring[] arrays. Bounds padded by
-  one cell to guarantee rings close at the border.
- 
-src/io/intentSerialization.ts — Multi-channel LLM payload (Phase 2 prep):
-  serializeIntent(graph, pins) → { vertices, regions }
-  Every PSLG vertex carries an intentMix { density, pedestrian, sqf, landuse }
-  sampled at its point. Every field-boundary region (from extractIntentContours)
-  carries the mix sampled at its centroid. Keys are lowercase, values normalized
-  0–1. Example:
-    { id: "density-region-0", type: "density", positions: [...],
-      intentMix: { density: 0.60, pedestrian: 0.40, sqf: 0.0, landuse: 0.0 } }
-  Pure data preparation — no network call. Phase 2 wires it to api/generate.ts.
+HARD vs SOFT constraints: HARD = lot boundary + MAIN corridors (never violated).
+SOFT = department fields overlap freely; MINOR corridors permeable; a pin is a fuzzy
+intent, so rooms may shift/stretch off the exact pin for a clean layout.
 
 
-LOCKING ARCHITECTURE
+DEPARTMENT FIELDS (layer 3)
+---------------------------
+A Department = { id, name, x, y, radius, color, deptType?, targetSqf?, roomCount?, grain? } —
+a soft Wyvill field, hard-masked to the lot ∩ ¬MAIN-corridors.
+
+- PROGRAM TYPES (types/geometry DEPARTMENT_TYPES/_META): placing a department picks one
+  of 10 office programs from a popup (DepartmentMenu, mirrors IntentPinMenu); the type
+  sets the default name + color + GRAIN (DEPARTMENT_META.defaultGrain). CORE (grey #9ca3af)
+  and MECHANICAL (black #111111) are service types whose color is FIXED
+  (FIXED_COLOR_DEPT_TYPES — setDepartmentColor + the panel swatch refuse to recolor them)
+  and whose grain is 0 (monolithic).
+- GEODESIC FIELD (geometry/departmentField.ts, buildDepartmentField): influence falls
+  off by SHORTEST PATH THROUGH the lot (bounded Dijkstra over a coarse grid, blocked by
+  boundary + MAIN corridors), NOT euclidean distance — so fields MORPH around corners
+  and fill concave nooks with no sightline seams (replaced the old euclidean + line-of-
+  sight shader). All departments blend into ONE RGBA texture on the CPU (dilated under
+  corridor bands), sampled by a trivial shader. Rebuilds on any dept/boundary/MAIN
+  change incl. live drag. Diagnostics (departmentAreas.ts): per-dept Core (exclusive) vs
+  Max (incl. overlap) SQF + lot coverage %.
+- VISIBILITY: full color + gradient on the Departments layer; magenta back-reference
+  dots on Circulation; hidden elsewhere.
+- ROOM LABELS (RoomsOverlay): each room is labelled with its department-TYPE INITIALS
+  (initialsOf, e.g. Open Office → "OO") and a small floor-area figure underneath; on the
+  Circulation layer only the initials show, in light magenta (matching the ghost walls).
+  Labels are drei <Html> (pointerEvents off) and skipped on rooms too small for legible text.
+
+
+ROOMS (layer 4) — generateRooms() in geometry/rooms.ts
+------------------------------------------------------
+Derived state: re-generated on ENTRY to the Rooms layer (cascade) and on any room-affecting
+edit, from boundary + circulation + departments — so upstream edits re-flow rooms
+automatically. Room = { roomId, parentDeptId, polygon, areaSqf, isLocked }.
+
+  GRAIN (the primary control): each department carries grain ∈ [0,1] (0 = open-plan → few
+    large rooms, 1 = cellular → many small). generateRooms derives the EFFECTIVE count from
+    the department's actual cell area ÷ a grain-implied target room area (grainToTargetArea:
+    ~2500→120 ft² with a map scale, else tied to the grid module; geometric interpolation,
+    capped GRAIN_ROOM_CAP=48). So a bigger department at the same grain gets more rooms.
+    Set via the panel slider (setDeptGrain). Typing an explicit N (setRoomCount) overrides
+    grain for that department; both clear the other.
+  SEEDING: entering the layer defaults any department with no grain/count yet to
+    DEFAULT_ROOM_COUNT=6 rooms (a fixed dev/testing default) so rooms appear immediately;
+    dragging the grain slider then hands control to grain. (Type defaultGrain is still used
+    for the slider's displayed starting position.)
+  UNLOCK GATE: the Rooms layer (and later) unlocks once department gradients cover ≥ 85%
+    of the lot infill (DEPT_COVERAGE_MIN = 0.85).
+  PASS 0  pieces = lot ∖ MAIN-corridor bands (turf difference; endpoints extended past
+          the boundary for a clean cut). Each department binds to the piece containing
+          its pin.
+  PASS 1  ORTHOGONAL GUILLOTINE: recursively bisect each piece among its departments
+          with straight, grid-snapped cuts (area ∝ weight = radius²) → one cell per dept,
+          100% fill, no overlap. Each cut uses the LOCAL grid frame at the cut (orientAt) so the
+          border between two departments aligns to the grid WHERE THEY MEET (no harsh diagonal
+          across a seam), and it runs along the axis the departments are most SPREAD on (siteSpread)
+          so one clean grid line separates them; a nearby MAIN hall instead forces cuts ⟂ the hall.
+  PASS 2  LINEAR STRIP SLICER: each dept cell → N equal-area rooms cut along a SINGLE grid
+          axis (no recursive axis-alternating, so rooms never rotate into landlocked
+          orientations). The orientation is chosen by QUALITY (chooseStripSlicing): both grid
+          axes are sliced and SCORED (scoreStripSet — rewards hitting the target N, equal room
+          areas, low skinniness/aspect); the better option wins, so rooms never come out skinny
+          just to follow a heuristic. On a near-tie the corridor-parallel axis (corridorAxisChoice)
+          breaks it, so fingers still front the desired circulation. Strip count is capped to the
+          min room width (a target N — fewer, fuller rooms beat slivers). linearStripSlice().
+          MULTI-GRID CLUSTERING: if a dept cell straddles >1 grid region (the user drew
+          seams giving regions different orientations), it gets ONE CLUSTER PER REGION,
+          each sliced along its own grid; the room count is split by area (allocateCounts,
+          ≥1 per region). sliceDeptAcrossRegions(). Robustness: each region part remembers
+          its frame (a single-region cell slices in ITS region's frame, not orientAt(center)
+          which returns the whole-lot orientation in the seam gap); intersect is retried with
+          cleaned coords (robustIntersect) so a region isn't silently dropped; and the leftover
+          (seam band + any dropped region chunk) is reassigned to the region it actually sits in
+          — recovering a whole region as its own cluster — so orientations never get crossed.
+  PASS 3  MINOR corridors boolean-subtracted from rooms (a crossing hallway splits a room).
+  PASS 4  sliver absorption: tiny/thin rooms merge (turf.union) into the best adjacent room,
+          but NEVER across grid orientations (a merge whose neighbor sits in a differently-
+          oriented seam region is rejected) — so a merged room never mixes two grid directions
+          into an arbitrary diagonal. orientAt falls back to the NEAREST region's frame for a
+          point in the thin seam gap (not the whole-lot orientation), so seam-adjacent rooms are
+          judged in their real grid.
+
+ROOM LOCKING (progressive "complete by accretion"): click a room on the Rooms layer to
+freeze it (RoomsOverlay onClick → toggleRoomLock; locked rooms render solid with a heavier
+edge). regenRooms() (drawingStore) keeps every locked room verbatim AND feeds them to
+generateRooms as KEEP-OUTS (lockedRooms param, subtracted from pieces like MAIN bands) so
+unlocked rooms reflow AROUND them. Toggling a lock does NOT reflow — only the next grain/
+count/department edit does. RoomControls shows a "% locked / Complete" bar + Unlock-all.
+
+WALL ERASING (Erase tool on the Rooms layer, the DEFAULT tool on entry): contact over the wall
+between ANY two adjacent rooms deletes it — the two MERGE into one (geometry/roomMerge.
+mergeRoomsAtWall via store.eraseRoomWallAt). The survivor keeps the LARGER room's department (so a
+department-border wall erases too, the bigger zone absorbing the smaller) and every affected
+department's count is re-pinned. Coordinates are truncated before the union so a hairline float gap
+on a shared edge still merges. Won't erase an outer/boundary wall, a corner-only touch, or a locked
+room. (The Lock tool, not Erase, toggles room locks.)
+
+ROOM EDITING (Edit tool on the Rooms layer): drag room CORNERS by hand (geometry/
+roomEdit.ts). The whole welded joint moves (shared walls stay shared); T-junction
+neighbors slide so no gaps open; corners snap to neighbor walls / corridor borders /
+the lot boundary, clamp inside the lot, and reject self-intersection or overlap. Edits
+are transient (overwritten on the next regeneration).
+
+
+EDIT (VECTOR) TOOL — what it edits depends on the active layer
+--------------------------------------------------------------
+geometry/editTargets.getEditTargets selects the draggable set on the ACTIVE board:
+  Lot Boundary → ring vertices · Circulation → centerline vertices · Departments → pin
+  centers (move the whole zone) · Rooms → room corners (weld drag, above) · Intent → pin
+  centers · other → planar-graph vertices.
+Graph/boundary/circulation anchors snap to nearby geometry (excluded from snapping to
+themselves); Shift constrains to H/V. One undo step per drag. Leaving the tool re-trims
+circulation back inside the lot.
+
+GOTCHA (fixed 2026-06-05): drei <Html> ignores its `pointerEvents` prop in non-transform
+mode — a centered label (e.g. a department name on its pin) silently swallowed the click
+and blocked the Edit tool. Fix = also pass `style={{ pointerEvents: 'none' }}`.
+
+
+DATA MODEL (source of truth)
+----------------------------
+All sketch geometry is a Planar Straight-Line Graph (PSLG); renders are a derived cache.
+  Graph        { vertices: Record<id,{id,x,y}>, strokes: Stroke[] }   single source
+  Stroke       { id, color, path: PathPoint[], raw?, straight?, strokeWidth?, lineStyle? }
+  Boundary     { ring: {x,y}[], isClosed?, targetSqf? }               the lot
+  CirculationPath { id, centerline: {x,y}[], width, tier:'MAIN'|'MINOR' }
+  Department   { id, name, x, y, radius, color, deptType?, targetSqf?, roomCount?, grain? }
+  Room         { roomId, parentDeptId, polygon: {x,y}[], areaSqf, isLocked }
+  IntentPin    { id, x, y, radius, intentType }
+  LockPolygon  { id, points: {x,y}[], featherRadius }
+  TextLabel / Underlay / lotGridSeams: {x,y}[][] …
+  CanvasEntry  { id, origin:{x,y} } + CanvasDoc (one board's whole document: geometry +
+               per-board layer/pipeline state). HistoryEntry snapshots the WHOLE world.
+
+Coordinates: origin (0,0) at the CENTRAL board's page center, y UP. All geometry is in
+ABSOLUTE world coords (renders at its board with no transform); only page furniture
+(sheet/grid/underlay) sits in a <group position={origin}>. Export flips y:
+fx = x + W/2, fy = H/2 − y. metersPerWorldUnit (null until a Mapbox projection calibrates
+it) converts world area → ft².
+
+
+MULTI-BOARD (design-option "branches")
+--------------------------------------
+The workspace holds several boards laid out spatially as neighboring options. The ACTIVE
+board's CanvasDoc IS the live store; inactive boards are read-only snapshots
+(inactiveCanvasDocs) rendered at their offsets (InactiveCanvases). Hover an edge midpoint
+→ "+" spawns a neighbor (duplicate = deep-copy + shift; or blank). Each board keeps its
+own layer memory. Undo/redo is ONE global timeline over the whole world.
+
+
+RENDERING & INTERACTION
+-----------------------
+Strokes: Catmull-Rom resampled centerline → uniform-width triangle ribbon (round caps);
+polylines use sharp miters. Lineweight/style live on the Stroke; dashed/dotted walk the
+centerline by arc length and the same dashArray() drives SVG/PNG/PDF export. RibbonMesh
+recomputes its bounding sphere on geometry change (stale-sphere cull fix).
+An invisible viewport-following InteractionPlane (useFrame) receives all raycasts, giving
+world-space e.point.x/y that survive pan/zoom — the same coords every tool reads.
+
+
+SNAPPING ENGINE (CAD object-snap)
+---------------------------------
+spatialIndex.ts — SpatialGrid (64-unit hash) indexes every VERTEX and edge MIDPOINT;
+edges are bucketed into every cell their segment traverses (supercover) so long walls
+snap along their whole length. Incremental: a vertex drag re-buckets only that vertex +
+its incident edges; topology changes rebuild (gated by graph.strokes reference change).
+nearest() returns vertex-over-midpoint within SNAP_THRESHOLD_PX(8)/zoom.
+
+Polyline (usePolyline) runs a priority matrix, first hit wins, writes activeSnapGuide:
+  Endpoint > Midpoint > Intersection > Perpendicular > Parallel > Extension > Tracking
+  (O-TRACK) > Edge. snapMath.ts holds the pure 2D math. SnapGuideOverlay renders screen-
+  constant CAD guides (green glyphs / dashed alignment tracks). Vector Edit reuses
+  nearest() + the legacy blue SnapIndicator. Master toggle: snappingEnabled (F3 / Ctrl+G).
+Circulation Polyline also snaps to the lot grid (nodes/lines/boundary) so paths stay
+parallel/perp to the structural grid.
+
+
+INTENT FIELDS (on the ROOMS layer) & LOCKS
+------------------------------------------
+The Intent Pin tool unlocks ONLY on the Rooms layer (Ribbon gate) — it paints metaball-like
+fields over the finished floorplan. Two types for now: DENSITY (purple) and OPENNESS (teal)
+(types/geometry INTENT_TYPES/_META). Pins are per-type Wyvill fields; the GPU MetaballOverlay
+streams them via a DataTexture and blends overlaps by concentration (IntentFieldView renders the
+field + per-type markers + labels + the hover IntentConcentrationGrid on the Rooms layer).
+intentSerialization.ts builds a per-vertex/region intentMix payload (density/openness) — dormant
+Phase-2 scaffolding (not yet wired into room generation). LockPolygons mark fixed regions
+(interior distance field, lockInfluenceAt) that gate Normalize. (Distinct from per-ROOM locking.)
+
+NORMALIZE (selection-scoped, explicit): right-click a selection → "Clean up" slider.
+normalizeStroke() fits line / circle (Pratt) / triangle / rectangle (OBB) per stroke;
+lock influence scales each vertex's move. No multi-stroke or ellipse fitting yet.
+
+
+IMPORT / EXPORT / MAP
 ---------------------
-LockPolygon is drawn by a marquee drag (LASSO_LOCK tool). Visual: flat,
-semi-transparent grey (binary pointInPolygon fill — the feather gradient removed
-from the visual for clarity).
-
-lockInfluenceAt(x, y, locks) in geometry/locks.ts: interior distance field.
-  0.0 at polygon boundary → 1.0 at depth ≥ featherRadius inside the polygon.
-  Multiple locks combined by max (union). Drives the Normalize pipeline (vertex
-  delta scaled by 1 - influence) and will gate the Generate pipeline.
-
-Intent Pins are SPATIAL PROMPTS — they do NOT freeze geometry. They mark
-programmatic intent. The two-layer system (geometric lock + programmatic intent)
-is the precision advantage over prompt-only generation.
+Image/PDF import → raster Underlay (aspect-fit centered; page frame never resized).
+Export SVG / PNG (2×) / PDF (active board only). Mapbox overlay is lazy-loaded; Turf
+live measurements; live scale calibration → metersPerWorldUnit. VITE_MAPBOX_TOKEN from
+.env (git-ignored); style URL hardcoded in MapView (swap for a Studio style).
 
 
-NORMALIZATION
---------------
-Entry point: user selects strokes with Marquee or Lasso, right-clicks inside the
-selection → "Clean up" panel with a strength slider (0–1). Normalization is
-ALWAYS selection-scoped and explicitly triggered — geometry never mutates
-automatically. ESC cancels and reverts via revertHistory().
-
-Pipeline (src/geometry/mutations/):
-
-  normalizeSelection.ts — computeNormalizeTargets(graph, strokeIds):
-    For each selected stroke, resolves its PathPoints to world-space centerline
-    points, calls normalizeStroke(), and maps the returned target positions back
-    to vertex IDs. Produces two Maps: originals (current positions) and targets
-    (fitted positions). Vertices that belong to no fitted stroke keep original =
-    target (they don't move). The caller lerps original → target by strength.
-
-  normalize.ts — normalizeStroke(points: Pt[]): Pt[] | null:
-    The primitive classifier + fitter. Returns 1:1 target positions or null if
-    no confident fit. Classification order (first match wins):
-
-    OPEN STROKE → best-fit straight line
-      Uses PCA on the point cloud: builds the 2×2 scatter matrix [Sxx Sxy; Sxy Syy],
-      solves for the dominant eigenvector via θ = 0.5·atan2(2·Sxy, Sxx−Syy), finds
-      the min/max projection extents, and distributes the n output points uniformly
-      along the fitted line segment. H/V snap: if the line angle is within 8°
-      (HV_SNAP_RAD = 8π/180 rad) of a cardinal axis, the line is locked exactly
-      horizontal or vertical before distributing points.
-
-    CLOSURE TEST (before fitting closed shapes)
-      A stroke is treated as closed when its endpoint gap < 20% of total perimeter
-      (CLOSE_GAP_FRAC = 0.2) AND it has ≥ 4 unique points.
-
-    CIRCLE (tried before polygons, only when m ≥ 8 points)
-      Algebraic least-squares via the Pratt formulation. Reduces to a 3×3 linear
-      system over the moments {Sx, Sy, Sxx, Syy, Sxy, Sxz, Syz, Sz}:
-        [Sxx Sxy Sx] [A]   [Sxz]
-        [Sxy Syy Sy] [B] = [Syz]
-        [Sx  Sy  n ] [C]   [Sz ]
-      Center = (A/2, B/2), radius = √(C + cx² + cy²). Solved by Gauss-Jordan
-      with partial pivoting. Accepted only if RMS radial error / R < 0.18
-      (CIRCLE_RESIDUAL_MAX). Each fitted point is projected radially: angle =
-      atan2(p.y − cy, p.x − cx), target = (cx + r·cos, cy + r·sin).
-
-    CORNER DETECTION (shared by triangle and rectangle)
-      detectCorners() rotates the loop to start at the point farthest from the
-      centroid (most likely a salient corner), then runs an augmented RDP on the
-      closed loop with ε = 5% of the bounding-box diagonal (CORNER_EPS_FRAC =
-      0.05). Returns the sorted indices of dominant corners.
-
-    TRIANGLE (3 detected corners)
-      Corner positions are taken directly from the loop at the detected indices.
-      Every loop point is then slid to its arc-length-proportional position along
-      the triangle edges via polygonTargets(): the perimeter is parameterized 0–1,
-      each point's f = cumArc/perimeter is mapped to the nearest inter-corner
-      segment, and the point is linearly interpolated between the two bounding
-      corner positions (corners snap exactly; intermediate points slide).
-
-    RECTANGLE (4 detected corners)
-      fitRectangle() enforces right-angle geometry:
-      1. Edge orientations: average the 4 edge angles using the 4× angle trick
-         (sum cos(4θ) and sin(4θ), then atan2/4) to get a modulo-90° consensus
-         orientation θ and its perpendicular — avoids circular-mean wraparound.
-      2. Oriented bounding box: projects all loop points onto the (ux, uy) and
-         (vx, vy) axes to find umin/umax/vmin/vmax, yielding four exact corners.
-      3. Each detected corner is snapped to its nearest OBB corner by comparing
-         its (u,v) projection to the center umid/vmid.
-      4. Degenerate check: all 4 OBB corners must be claimed by distinct detected
-         corners; returns null otherwise (no fit).
-      Points then slide via polygonTargets() as with triangle.
-
-  Lock gating: strength is modulated per vertex by (1 - lockInfluenceAt(v.x, v.y,
-  locks)) before application. A vertex at influence 1.0 (hard lock core) does not
-  move regardless of strength slider. Feather zone vertices move proportionally.
-
-Improvements needed / known gaps:
-  - No multi-stroke fitting (each stroke is fit independently; parallel corridors,
-    L-intersections, and T-junctions are not detected across strokes).
-  - No ellipse fitting; near-elliptical closed strokes currently fall through to
-    null (no fit).
-  - Urban morphology extensions (corridor detection, convex polygon generalization,
-    greenway smoothing) are designed in the plan but not yet wired to the UI.
+PHASE 2 — LLM GENERATE (deferred)
+---------------------------------
+Serialization is ready (intentSerialization, lockInfluenceAt, geoScale). To activate:
+wire api/generate.ts (Vercel Edge Function → Anthropic), encode LOCKED/TRANSITION/OPEN +
+intentMix in the system prompt, and merge returned vector segments back into the PSLG
+(reviewable Accept/Reject). No raster ever.
 
 
-FEATURE INVENTORY
-------------------
+SOURCE MAP (for coding agents)
+------------------------------
+  store/drawingStore.ts            state, actions, layer cascade, multi-board, history
+  geometry/lotGrid.ts              structural grid + seam regions (per-region orientation)
+  geometry/departmentField.ts      geodesic blended department field texture
+  geometry/departmentAreas.ts      Core/Max SQF + coverage diagnostics
+  geometry/rooms.ts                generateRooms (pieces→guillotine→slice→carve→absorb)
+  geometry/roomEdit.ts             Rooms-layer corner weld/drag editing
+  geometry/editTargets.ts          what the Edit tool exposes per layer
+  geometry/corridor.ts             centerline→band rings, circulation masks
+  geometry/spatialIndex.ts, snapMath.ts   snapping grid + CAD math
+  hooks/useDeptTool, useVectorEdit, usePolyline, useEraser …   tool behavior
+  components/Canvas/*Overlay,*View.tsx     R3F render layers
+  components/Toolbar/{IntentPinMenu,DepartmentMenu}.tsx   placement popups
+  components/Panel/RightPanel.tsx  layer navigator + per-layer controls
+  components/ProgramSheet/ProgramSheet.tsx  space-programming grid (split/full modal + tabs)
+  components/ProgramSheet/{DashboardTab,DepartmentTab,RoomTab}.tsx  the three live tabs
+  components/ProgramSheet/cells.tsx  controlled grid cells (commit on blur/Enter, validation)
+  geometry/programMetrics.ts       dashboard metrics (gross site/circulation, net, net-to-gross)
+  store/programSheetStore.ts       Program Sheet view-state (closed/split/full + tab + advisory)
+  types/geometry.ts                all types + DEPARTMENT_TYPES/_META, INTENT_META
 
-CANVAS & NAVIGATION
-- R3F orthographic scene; light grey (#eef0f3) workspace backdrop, white page
-  sheet; page border line (#c0c6cf; accent blue on the active board when >1 exists)
-- Pan: middle-click drag, Space+drag, Pan tool
-- Zoom: scroll wheel, cursor-anchored, MIN 0.2× MAX 20×
-- Undo/Redo: Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z or Y. ONE GLOBAL timeline across all
-  boards: each HistoryEntry snapshots the whole world (active board's full doc +
-  activeCanvasId + canvases + the other boards' docs), so board creation is undoable
-  and an edit rolls back on the board it happened on. See MULTI-BOARD below.
-- ESC clears active selection
-
-MULTI-BOARD (DESIGN-OPTION CANVASES / "branches")
-- The workspace holds multiple boards laid out spatially as neighboring design
-  options, not isolated files. Each board is a self-contained CanvasDoc living at a
-  world-space `origin` offset (see DATA MODEL); the CENTRAL board sits at (0,0), so
-  the single-board behavior is unchanged.
-- ACTIVE vs INACTIVE: the active board's document IS the live drawingStore fields
-  (every tool edits it directly); inactive boards are snapshots in
-  store.inactiveCanvasDocs, rendered READ-ONLY at their offsets by InactiveCanvases
-  (full fidelity: strokes, boundary fill+outline, circulation centerlines, intent
-  field + pin markers, locks, grid, underlay; text/scribbles via the shared DOM
-  overlays). Click any neighbor board to activate it (DrawingLayer pointer-down
-  intercept while a creation tool is live; the ghost sheet's onClick otherwise).
-- SPAWNING: hover just outside an edge midpoint of the active board (N/E/S/W) → a
-  "+" fades in (CanvasBranchControls). Clicking it opens a chooser:
-    • Duplicate board — clone the active board's full state (translateCanvasDoc
-      deep-copies and shifts all ABSOLUTE-coord geometry to the new slot).
-    • Blank board — a fresh board at the Context layer (choose a substrate again).
-  The neighbor spawns adjacent, gutter-spaced (CANVAS_GAP) so boards never touch;
-  spawning does NOT steal focus. Boards are named "Board 01", "Board 02", …
-- PER-BOARD LAYER MEMORY: each board carries its OWN pipeline state — activeLayer,
-  maxLayerReached, context (substrate), grid type/spacing, boundaryInfillOpacity,
-  circulationWidth, metersPerWorldUnit, map active/dim/geometry — plus all its
-  geometry. Switching boards swaps it all in/out; changing one board's layers never
-  affects another. The right panel shows the active board's name and only its layers.
-- Coordinate rule: all geometry is ABSOLUTE world coords (so it renders at the
-  board's location with no per-board transform); only page furniture (sheet/grid/
-  underlay) is drawn inside a `<group position={origin}>`. Page-confined tools
-  (Polyline/Scribble/Text) clamp to the page rect centered at activeOrigin(state).
-
-UI SHELL
-- Top menu bar: "Gradia Draw" brand lockup (gradient app mark + clean sans
-  wordmark; professional/corporate) + File / Document placeholders
-- Single-row compact tool rail (46px): Pan Scribble Text | Polyline Erase Edit |
-  Marquee Lasso Lock Intent Pin [Export▼]. Color & Pen (weight/style) options moved
-  OUT of the rail into the per-tool contextual bar (below). Export opens a floating
-  panel (SVG/PNG/PDF); every other button is a direct tool toggle. (Import substrate
-  + Generate live in the right-panel Layer Hierarchy, not the rail.)
-- CONTEXTUAL TASK BAR (Photoshop-style, ContextualBar): a compact floating row that
-  appears only for the Scribble and Text tools. Spawns bottom-center, draggable by a
-  left gripper (position persists across tool switches, clamped to the canvas).
-    • Scribble → stroke color (circular swatches + custom picker) + line-weight presets.
-    • Text     → stroke color + a PSEUDO size control (placeholder; real per-label
-      sizing still needs the Text tool reworked — TextLabel.size is fixed at 14).
-  To add a bar for another tool: add a `toolMode === 'X' && <Control/>` branch.
-- Full-viewport crosshair: 1px lines via rAF dirty-flag + translate3d (GPU-
-  accelerated); hidden while map active; light-mode color rgba(80,90,105,0.28)
-
-SKETCH TOOLS
-- Scribble (DRAW): freehand, uniform width, RDP-simplified, centripetal Catmull-Rom
-  ribbon, round caps/joins; color + line-weight via the contextual bar
-- Polyline: click-to-place, straight quads, miter joins; Shift-ortho constraint;
-  CAD object snaps with priority matrix Endpoint > Perpendicular > Parallel > Edge
-  (snap > Shift-ortho); edge snap lands the cursor on any existing line, snapping
-  against committed geometry AND the in-progress line being drawn; double-click or
-  Enter to finish; click near start to close
-- Erase: swept-capsule, splits at intersections
-- Pan: dedicated mode (also Space)
-- Text: click to place; drag to reposition in Vector Edit mode
-
-NORMALIZE TOOLS
-- Marquee Select: rectangle drag, selects by vertex inclusion
-- Lasso Select: freehand polygon selection, segments at boundary
-- Edit (Vector): direct-selection editing of the LAYER-APPROPRIATE geometry on the
-  ACTIVE board (geometry.editTargets.getEditTargets picks the set): Lot Boundary
-  layer → boundary ring vertices; Circulation layer → centerline vertices; other
-  layers → planar-graph vertices. Shows the vertices + a blue edge wireframe, drag
-  to reshape, drag text labels too. ALL anchors snap to nearby geometry while
-  dragging (vertex/midpoint) so a boundary/circulation vertex can land exactly on
-  the lot boundary, another centerline, or a graph vertex — the dragged anchor is
-  excluded by its spatial-index id ('bnd:v<i>', 'circ:<pathId>:v<i>') so it can't
-  snap to itself; Shift-ortho applies when no target is in range. One undo step per
-  drag (beginHistory on grab). Live moves go through setVertexPositions /
-  setBoundaryPoint / setCirculationPoint (no per-move history).
-  AUTO-TRIM: leaving the Edit tool (setTool away from VECTOR) re-clips every
-  circulation centerline back inside the closed lot boundary (trimCirculationToBoundary
-  → clipPolylineToPolygon), so edits to a corridor OR to the boundary that pushed a
-  path outside are trimmed automatically — same clipping the Polyline tool applies on
-  commit. One undo step; no-op when nothing is outside.
-- Lock Region: rectangle drag places semi-transparent grey lock overlay
-
-PIN TOOLS
-- Intent Pin: click → type popup → drag to set radius
-  Types: Density (purple), Pedestrian flow (green), SQF priority (orange),
-  Land use (blue)
-- Hovering the Intent Pin button: reveals per-pin type labels AND overlays
-  the region concentration grid (accurate % data, not pseudo data)
-
-SNAP INDICATORS
-- SnapIndicator: screen-constant lineLoop glyph at active snap target (Vector Edit)
-  SQUARE = vertex/endpoint, TRIANGLE = midpoint
-- SnapGuideOverlay "Smart Track" (Polyline): hollow green square (endpoint),
-  hollow green triangle (midpoint), green ✕ (intersection), hollow green diamond
-  (edge / on-line), green dashed line + ∟ glyph (perpendicular), magenta dashed
-  track + ∥ glyph (parallel), green dashed track (extension); screen-constant
-  dashes, clears instantly when no snap is active
-- O-TRACK / TrackingOverlay (Polyline): light-gray ✛ at each acquired anchor +
-  thin gray dashed alignment rays from axis-aligned anchors to the locked cursor;
-  reads store.trackedPoints + activeSnapGuide('tracking'), gated on snappingEnabled
-- Master snapping toggle (Cluster 4): store.snappingEnabled (default true) +
-  toggleSnapping(). Both resolveSnap (Polyline) and useVectorEdit short-circuit to
-  raw pointer input when off; turning off also clears activeSnapGuide so cues
-  vanish instantly. Magnet button in the tool rail (accent when on, grayed with a
-  diagonal slash when off); F3 (CAD OSNAP standard) or Ctrl/Cmd+G toggles it from
-  anywhere, with a transient SnapToast confirmation. Shift-ortho, an explicit
-  modifier, still works while snapping is off.
-
-IMPORT / EXPORT
-- Image import: raster underlay, aspect-fit centered inside page frame,
-  page frame NOT resized
-- PDF import: first page via pdf.js (2× supersample), same placement logic
-- Remove underlay: clears asset; page frame unaffected
-- Export SVG (vector), PNG (2× raster), PDF (jsPDF vector + underlay)
-
-MAP / GEOSPATIAL
-- Mapbox GL JS 3 overlay, lazy-loaded (React.lazy + Suspense)
-- MapboxDraw with snap modes (vertex/edge/midpoint snapping)
-- Turf.js live measurements: polygon area, line length, point coords — HUD
-- Live scale calibration: mercatorMetersPerWorldUnit(lat, zoom) recomputed on
-  every map move/zoom; published to store as metersPerWorldUnit; shown in HUD
-  as "Scale · 1 unit ≈ X m/km"; cleared on map close
-- GeoJSON published to store.mapGeometry on draw events
-- VITE_MAPBOX_TOKEN from .env (never hardcoded; .env is git-ignored; public pk.
-  token, scope/URL-restrict it in the Mapbox account before deploy)
-- Style is hardcoded to 'mapbox://styles/mapbox/streets-v12' (MapView.tsx). To drive
-  the look from Mapbox Studio, publish a custom style and swap that URL (a
-  VITE_MAPBOX_STYLE env var would make it configurable without code changes).
-
-
-PHASE 2 — LLM GENERATE (Deferred)
------------------------------------
-Serialization infrastructure is built and ready (intentSerialization.ts,
-lockInfluenceAt, geoScale). The Generate pipeline itself:
-
-  api/generate.ts — Vercel Edge Function proxying Anthropic API
-  System prompt encodes: LOCKED (influence 1.0) = fixed anchors,
-    TRANSITION (feather zone) = bend/attach, OPEN (influence 0) = free;
-    + intentMix spatial matrix per vertex/region
-  Returns new vector segments into the PSLG graph (never raster)
-  Reviewable layer: Accept merges, Reject discards, Snapshot before merge
-
-The serializer already produces the exact payload format Claude needs.
-Phase 2 activation = wire api/generate.ts + swap the Generate tab placeholder.
-
-
-COORDINATE SYSTEM (for coding agents)
----------------------------------------
-- World origin (0,0) = page center; y up; 1 world unit = 1 screen pixel at zoom 1
-- Page bounds: x ∈ [-W/2, W/2], y ∈ [-H/2, H/2]
-- Export: fx(x) = x + W/2, fy(y) = H/2 - y
-- InteractionPlane (useFrame) gives world-space e.point.x/y on every tool event
-- Pan: cam.position.x -= dx / cam.zoom; cam.position.y += dy / cam.zoom
-- Zoom anchor: preserve cursor world point by adjusting cam.position post-zoom
-- getBoundingClientRect() called live on gl.domElement; never stale cached
-- Snap radius: SNAP_THRESHOLD_PX / camera.zoom → world units
+PROGRAM SHEET (document_int.txt — IN PROGRESS): an Excel-like space-programming grid bound
+bi-directionally to drawingStore. STEP 1 = UI placement + modal viewstate (MenuBar button →
+split column / full-screen overlay). STEP 2 = the 3 tabs are LIVE & BI-DIRECTIONAL:
+  • Project Dashboard — read-only metrics from computeProgramMetrics (DOWNSTREAM: re-renders on
+    any boundary/circulation/room change).
+  • Department Schedule — one row per store.departments; edit name (renameDepartment), target SQF
+    (setDepartmentTarget), or room count N (setRoomCount → re-slice) — UPSTREAM; Core/Max derived.
+  • Room Schedule — one row per store.rooms; Is Locked checkbox (toggleRoomLock) UPSTREAM; parent
+    dept / area / % of dept derived.
+  Edits commit on blur/Enter (§4.1); invalid entries (N<1 etc.) revert and flash the advisory HUD
+  (§4.3, programSheetStore.flash). STEP 3 = the §3 grid matrix is complete:
+  • Dashboard columns Metric | Target | Actual | Variance | Efficiency %.
+  • A department TARGET now SIZES its pin (applyDepartmentTarget → radius ≈ √(targetArea/FOOTPRINT_K),
+    regenerates) and shows a "⊏ sheet" constraint chip; clearing frees the pin.
+  • Room rows are NAMEABLE (renameRoom, transient) and have SPLIT / MERGE actions: splitRoom
+    (geometry/roomSplit, grid-aligned equal-area bisect in place) and mergeRoom (roomMerge.
+    mergeRoomWithNeighbor, merge into best adjacent same-dept room).
+  DEFERRED: Excel import/export (§1.3).
+================================================================================

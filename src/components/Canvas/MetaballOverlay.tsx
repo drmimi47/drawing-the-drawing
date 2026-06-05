@@ -65,8 +65,19 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uColors[4];
   uniform float uMaxAlpha;
   uniform float uThreshold;
+  uniform vec2 uClipMin;     // board (page) rect in world coords — gradient is clipped
+  uniform vec2 uClipMax;     // to this so it never spills onto the grey workspace
+  uniform float uClipEnabled;
 
   void main() {
+    // Clip to the selected board's white page rect: drop any fragment outside it so
+    // the field never bleeds onto the grey background between/around boards.
+    if (uClipEnabled > 0.5 &&
+        (vWorld.x < uClipMin.x || vWorld.x > uClipMax.x ||
+         vWorld.y < uClipMin.y || vWorld.y > uClipMax.y)) {
+      discard;
+    }
+
     // Accumulate each intent type's field independently (isolation).
     float f0 = 0.0, f1 = 0.0, f2 = 0.0, f3 = 0.0;
     for (int i = 0; i < uTotalPins; i++) {
@@ -104,7 +115,15 @@ const fragmentShader = /* glsl */ `
   }
 `
 
-export function MetaballOverlay({ pins }: { pins: IntentPin[] }) {
+/** World-space rectangle the gradient is confined to (a board's white page). */
+export interface FieldClip {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+export function MetaballOverlay({ pins, clip }: { pins: IntentPin[]; clip?: FieldClip | null }) {
   // The pin DataTexture lives across renders; we only reallocate when the pin
   // count needs more rows than are currently allocated (grow-only), and dispose
   // it on unmount so rapid pin mutations never leak GPU memory.
@@ -129,6 +148,9 @@ export function MetaballOverlay({ pins }: { pins: IntentPin[] }) {
       uColors: { value: colors },
       uMaxAlpha: { value: MAX_ALPHA },
       uThreshold: { value: VIS_THRESHOLD },
+      uClipMin: { value: new THREE.Vector2(0, 0) },
+      uClipMax: { value: new THREE.Vector2(0, 0) },
+      uClipEnabled: { value: 0 },
     }
   }, [])
 
@@ -191,10 +213,25 @@ export function MetaballOverlay({ pins }: { pins: IntentPin[] }) {
     }
   }, [pins, uniforms])
 
+  // Feed the board-rect clip into the (stable) uniforms each render; mutating .value
+  // leaves the material/program intact.
+  if (clip) {
+    uniforms.uClipMin.value.set(clip.minX, clip.minY)
+    uniforms.uClipMax.value.set(clip.maxX, clip.maxY)
+    uniforms.uClipEnabled.value = 1
+  } else {
+    uniforms.uClipEnabled.value = 0
+  }
+
   if (!aabb) return null
 
   return (
-    <mesh position={[aabb.cx, aabb.cy, FIELD_Z]} renderOrder={-1} raycast={() => null}>
+    // renderOrder 26: the intent field is the topmost analytical layer, so it sorts
+    // ABOVE the boundary infill (19/20) and circulation bands (24/25) — a 100% white
+    // lot infill no longer paints over the gradient. depthTest off so it isn't
+    // occluded by the depth buffer (mirrors the other canvas overlays). The solid pin
+    // dots (PinMarkers, renderOrder 27) stay just above this wash.
+    <mesh position={[aabb.cx, aabb.cy, FIELD_Z]} renderOrder={26} raycast={() => null}>
       <planeGeometry args={[aabb.w, aabb.h]} />
       <shaderMaterial
         vertexShader={vertexShader}
@@ -202,6 +239,7 @@ export function MetaballOverlay({ pins }: { pins: IntentPin[] }) {
         uniforms={uniforms}
         glslVersion={THREE.GLSL3}
         transparent
+        depthTest={false}
         depthWrite={false}
       />
     </mesh>

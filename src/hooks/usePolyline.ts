@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
 import type { OrthographicCamera } from 'three'
 import { useDrawingStore, activeOrigin } from '../store/drawingStore'
 import type { SamplePoint } from '../types/geometry'
 import type { SnapGuide } from '../types/geometry'
 import { SNAP_THRESHOLD_PX, type SnapPoint } from '../geometry/spatialIndex'
+import { buildGridSnapModel, snapToGrid, type GridSnapModel } from '../geometry/gridSnap'
 import {
   checkParallelSnap,
   checkPerpendicularSnap,
@@ -94,7 +95,7 @@ function resolveSnap(
   pts: { x: number; y: number }[],
   zoom: number,
 ): SnapResult {
-  const { spatialIndex, snappingEnabled, trackedPoints } = useDrawingStore.getState()
+  const { spatialIndex, snappingEnabled, snapGuidesEnabled: guides, trackedPoints } = useDrawingStore.getState()
   // Master snapping switch (Cluster 4): when off, every tier is bypassed and the
   // cursor rides raw pointer input (Shift-ortho, an explicit modifier, still works
   // via the no-snap fallback path in onPointerDown / the preview).
@@ -146,15 +147,13 @@ function resolveSnap(
     // no prior vertex, from == to (the EndpointGlyph only reads toPoint anyway).
     const from: [number, number] =
       pts.length > 0 ? [pts[pts.length - 1].x, pts[pts.length - 1].y] : [epPos.x, epPos.y]
+    // Vertex-to-vertex always snaps. With guides OFF it snaps silently (no indicator/guide).
     return {
       pos: epPos,
-      snapTarget: { x: epPos.x, y: epPos.y, kind: 'VERTEX', vid: epVid ?? null, edge: null },
-      guide: {
-        type: 'endpoint',
-        fromPoint: from,
-        toPoint: [epPos.x, epPos.y],
-        sourceVertexId: epVid,
-      },
+      snapTarget: guides ? { x: epPos.x, y: epPos.y, kind: 'VERTEX', vid: epVid ?? null, edge: null } : null,
+      guide: guides
+        ? { type: 'endpoint', fromPoint: from, toPoint: [epPos.x, epPos.y], sourceVertexId: epVid }
+        : null,
       isAdvanced: true,
     }
   }
@@ -164,7 +163,7 @@ function resolveSnap(
   // cursor: lock exactly to the edge centre and emit a dedicated 'midpoint'
   // guide (green triangle). This makes the centre of a partition wall / easement
   // boundary a first-class, intuitively targetable anchor.
-  if (near && near.kind === 'MIDPOINT') {
+  if (guides && near && near.kind === 'MIDPOINT') {
     const from: [number, number] =
       pts.length > 0 ? [pts[pts.length - 1].x, pts[pts.length - 1].y] : [near.x, near.y]
     return {
@@ -185,7 +184,7 @@ function resolveSnap(
   // it — so you can anchor on where two walls *would* meet even before they touch.
   // Always active (no session required); only the cursor-proximity gate matters,
   // so far-flung crossings never hijack the cursor. O(n²) over a tiny local set.
-  {
+  if (guides) {
     let bestIxnDist = snapRadiusW
     let bestIxnPos: { x: number; y: number } | null = null
     for (let i = 0; i < committed.length; i++) {
@@ -236,22 +235,20 @@ function resolveSnap(
     if (bestEdgePos) {
       const from: [number, number] =
         pts.length > 0 ? [pts[pts.length - 1].x, pts[pts.length - 1].y] : [bestEdgePos.x, bestEdgePos.y]
+      // Vertex-to-edge always snaps. With guides OFF it snaps silently (no guide visual).
       return {
         pos: bestEdgePos,
         snapTarget: null,
-        guide: {
-          type: 'edge',
-          fromPoint: from,
-          toPoint: [bestEdgePos.x, bestEdgePos.y],
-          sourceEdgeId: bestEdgeKey ?? undefined,
-        },
+        guide: guides
+          ? { type: 'edge', fromPoint: from, toPoint: [bestEdgePos.x, bestEdgePos.y], sourceEdgeId: bestEdgeKey ?? undefined }
+          : null,
         isAdvanced: true,
       }
     }
   }
 
-  // ── Priorities 5–7: require an active polyline session ───────────────────
-  if (pts.length > 0) {
+  // ── Priorities 5–7: construction guides (require an active polyline session) ──
+  if (guides && pts.length > 0) {
     const P = pts[pts.length - 1]
     const perpThresh = (SNAP_THRESHOLD_PX * PERP_THRESHOLD_MULT) / zoom
     // Candidate reference edges = nearby committed edges PLUS every segment of the
@@ -365,7 +362,7 @@ function resolveSnap(
   // nearest anchor y — so two anchors snap the cursor to their (T1.x, T2.y)
   // intersection. Lower than the object snaps above (it aligns to remembered
   // points, not to geometry directly under the cursor); the last tier before raw.
-  if (trackedPoints.length > 0) {
+  if (guides && trackedPoints.length > 0) {
     let bestVx: number | null = null
     let bestVxDist = snapRadiusW
     let bestHy: number | null = null
@@ -405,6 +402,19 @@ export function usePolyline() {
   const baseWidth = useDrawingStore((s) => s.baseWidth)
   const strokeColor = useDrawingStore((s) => s.strokeColor)
   const commitStroke = useDrawingStore((s) => s.commitStroke)
+
+  // Lot structural-grid snap model — circulation paths ride the grid (parallel/perp to
+  // the walls). Rebuilt only when the boundary / seams / spacing change; read from a ref
+  // inside the (memoized) pointer handlers.
+  const gridBoundary = useDrawingStore((s) => s.boundary)
+  const lotGridSpacing = useDrawingStore((s) => s.lotGridSpacing)
+  const lotGridSeams = useDrawingStore((s) => s.lotGridSeams)
+  const gridModel = useMemo<GridSnapModel | null>(() => {
+    if (!gridBoundary || gridBoundary.isClosed === false || gridBoundary.ring.length < 3) return null
+    return buildGridSnapModel(gridBoundary.ring, lotGridSpacing, lotGridSeams)
+  }, [gridBoundary, lotGridSpacing, lotGridSeams])
+  const gridModelRef = useRef<GridSnapModel | null>(gridModel)
+  gridModelRef.current = gridModel
 
   const [points, setPoints] = useState<{ x: number; y: number }[]>([])
   // Raw (un-snapped) cursor position from the last pointer-move event.
@@ -517,8 +527,16 @@ export function usePolyline() {
           useDrawingStore.getState().setBoundary(pts.map((p) => ({ x: p.x, y: p.y })))
         }
         reset()
+        return
       }
-      // Not closed → keep the path active; the user must close the loop.
+      // OPEN path while a CLOSED lot exists → a GRID SEAM (splits the internal grid).
+      // Endpoints snap to boundary vertices via the normal polyline snapping.
+      if (b && b.isClosed !== false && pts.length >= 2) {
+        useDrawingStore.getState().addLotGridSeam(pts.map((p) => ({ x: p.x, y: p.y })))
+        reset()
+        return
+      }
+      // Otherwise (no closed lot yet) → keep the path active; the user must close the loop.
       return
     }
     // Stage 2: an (open) polyline in the CIRCULATION layer commits a hallway
@@ -619,9 +637,17 @@ export function usePolyline() {
       // so the committed vertex is at the precise snapped coordinate.
       const { pos, snapTarget, isAdvanced } = resolveSnap(raw, pts, zoom)
 
-      // Shift-ortho only when no geometric snap constrained the position.
       let p = pos
-      if (!snapTarget && !isAdvanced && e.nativeEvent.shiftKey && pts.length > 0) {
+      // Circulation rides the lot grid: snap to a grid node / line (first point prefers a
+      // grid∩boundary point) so paths stay parallel/perpendicular to the established grid.
+      const gridHit =
+        state.activeLayer === 'CIRCULATION' && state.snapGuidesEnabled && gridModelRef.current
+          ? snapToGrid(gridModelRef.current, pos.x, pos.y, SNAP_THRESHOLD_PX / zoom, pts.length === 0)
+          : null
+      if (gridHit) {
+        p = gridHit
+      } else if (!snapTarget && !isAdvanced && e.nativeEvent.shiftKey && pts.length > 0) {
+        // Shift-ortho only when no geometric snap constrained the position.
         p = snapOrtho(pts[pts.length - 1], pos)
       }
 
@@ -649,7 +675,12 @@ export function usePolyline() {
       // so the existing effCursor logic in the preview path works without
       // additional changes — it just reads `cursor` which becomes the snap pos.
       const result = resolveSnap(raw, pointsRef.current, zoom)
-      cursorRef.current = result.pos
+      // Circulation preview rides the lot grid (matches the commit in onPointerDown).
+      const gridHit =
+        state.activeLayer === 'CIRCULATION' && state.snapGuidesEnabled && gridModelRef.current
+          ? snapToGrid(gridModelRef.current, result.pos.x, result.pos.y, SNAP_THRESHOLD_PX / zoom, pointsRef.current.length === 0)
+          : null
+      cursorRef.current = gridHit ?? result.pos
       snapRef.current = result.snapTarget
       snapGuideRef.current = result.guide
       isAdvancedSnapRef.current = result.isAdvanced

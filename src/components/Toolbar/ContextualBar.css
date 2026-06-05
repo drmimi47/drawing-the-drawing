@@ -57,12 +57,24 @@
   cursor: pointer;
   transition: background 110ms ease, border-color 110ms ease;
 }
-.ctx-btn:hover,
+.ctx-btn:hover:not(:disabled),
 .ctx-btn.is-open {
   background: var(--hover, rgba(20, 30, 60, 0.06));
 }
+.ctx-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 .ctx-btn svg {
   color: var(--text-dim, #8a92a0);
+}
+/* Active toggle (e.g. snapping guides on). */
+.ctx-btn.is-active {
+  background: var(--accent, #1f2937);
+  color: #ffffff;
+}
+.ctx-btn.is-active svg {
+  color: #ffffff;
 }
 
 .ctx-color-dot {
@@ -97,7 +109,7 @@
   cursor: pointer;
 }
 .ctx-swatch.is-active {
-  outline: 2px solid var(--accent, #2f6fed);
+  outline: 2px solid var(--accent, #1f2937);
   outline-offset: 1px;
 }
 .ctx-swatch--custom {
@@ -139,8 +151,8 @@
   background: var(--hover, rgba(20, 30, 60, 0.06));
 }
 .ctx-weight.is-active {
-  background: rgba(47, 111, 237, 0.1);
-  border-color: rgba(47, 111, 237, 0.45);
+  background: rgba(0, 0, 0, 0.07);
+  border-color: rgba(0, 0, 0, 0.35);
 }
 .ctx-weight-glyph {
   display: block;
@@ -150,7 +162,7 @@
   background: var(--text, #1c2330);
 }
 .ctx-weight.is-active .ctx-weight-glyph {
-  background: var(--accent, #2f6fed);
+  background: var(--accent, #1f2937);
 }
 
 /* Pseudo (placeholder) text-size control. */

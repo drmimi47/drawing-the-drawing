@@ -23,9 +23,7 @@ import { extractIntentContours } from '../utils/intentContours'
 /** Local intent concentration as a flat, LLM-friendly object (keys sum to ≤ 1). */
 export interface IntentMix {
   density: number
-  pedestrian: number
-  sqf: number
-  landuse: number
+  openness: number
 }
 
 export interface SerializedVertex {
@@ -53,9 +51,7 @@ export interface IntentSerialization {
 /** Map the internal IntentType enum to the serialized lowercase key. */
 const TYPE_KEY: Record<IntentType, keyof IntentMix> = {
   DENSITY: 'density',
-  PEDESTRIAN: 'pedestrian',
-  SQF: 'sqf',
-  LANDUSE: 'landuse',
+  OPENNESS: 'openness',
 }
 
 const ROUND = (n: number) => Math.round(n * 1000) / 1000
@@ -65,9 +61,7 @@ function mixAt(x: number, y: number, pins: IntentPin[]): IntentMix {
   const { mix } = getIntentConcentration(x, y, pins)
   return {
     density: ROUND(mix.DENSITY),
-    pedestrian: ROUND(mix.PEDESTRIAN),
-    sqf: ROUND(mix.SQF),
-    landuse: ROUND(mix.LANDUSE),
+    openness: ROUND(mix.OPENNESS),
   }
 }
 

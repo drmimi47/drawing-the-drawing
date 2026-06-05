@@ -5,17 +5,18 @@ import {
   Hand,
   Eraser,
   Type,
-  BoxSelect,
-  Lasso,
   MousePointer2,
   Lock,
   MapPin,
+  Building2,
   Download,
   FileCode,
   Image as ImageIcon,
   FileText,
+  Table,
 } from 'lucide-react'
 import { useDrawingStore, type ToolMode, type PipelineLayer } from '../../store/drawingStore'
+import { useProgramSheet } from '../../store/programSheetStore'
 import { exportSVG, exportPNG, exportPDF } from '../../io/exportDrawing'
 import './Ribbon.css'
 
@@ -26,7 +27,8 @@ import './Ribbon.css'
  * Tools are grouped by workflow stage with thin separators. Color/Pen/Export
  * open floating panels; every other button is a direct tool toggle.
  *
- * Layout: Pan Scribble Text | Polyline Erase Edit | Marquee Lasso Lock IntentPin [Export▼]
+ * Layout: Pan Scribble Text | Polyline Erase Edit | Dept | Lock IntentPin | [Export▼] Program Sheet
+ * (Marquee + Lasso are hidden for now; Lock + Intent Pin are enabled only on the Rooms layer.)
  * Color & Pen options moved to the per-tool contextual bar (ContextualBar).
  * Generate lives in the right-panel layer hierarchy, not the rail.
  */
@@ -48,12 +50,9 @@ const EDIT_TOOL: ToolDef = { key: 'VECTOR', label: 'Edit', Icon: MousePointer2 }
 const GROUP_NAV: ToolDef[] = [PAN_TOOL, SCRIBBLE_TOOL, TEXT_TOOL]
 /** Group 2: structured draw / edit tools. */
 const GROUP_DRAW: ToolDef[] = [POLYLINE_TOOL, ERASE_TOOL, EDIT_TOOL]
-/** The rest, flowing together with no further separators. */
-const REST_TOOLS: ToolDef[] = [
-  { key: 'SELECT', label: 'Marquee', Icon: BoxSelect },
-  { key: 'LASSO', label: 'Lasso', Icon: Lasso },
-  { key: 'LASSO_LOCK', label: 'Lock', Icon: Lock },
-]
+/** Rooms-only tools shown after the Dept divider. Marquee + Lasso are hidden for now. */
+const LOCK_TOOL: ToolDef = { key: 'LASSO_LOCK', label: 'Lock', Icon: Lock }
+const INTENT_PIN_TOOL: ToolDef = { key: 'INTENT_PIN', label: 'Intent Pin', Icon: MapPin }
 
 /**
  * Per-layer tool allowlist — which tool buttons are ENABLED in each pipeline
@@ -68,23 +67,32 @@ const LAYER_ENABLED_TOOLS: Partial<Record<PipelineLayer, Set<ToolMode>>> = {
   CONTEXT: new Set<ToolMode>(['PAN']),
   BOUNDARY: new Set<ToolMode>(DRAW_TOOLS),
   CIRCULATION: new Set<ToolMode>(DRAW_TOOLS),
+  // Departments layer: same draw tools, plus the Dept tool (gated separately in ToolBtn).
+  DEPARTMENTS: new Set<ToolMode>(DRAW_TOOLS),
+  // Rooms layer: parametric (panel-driven), plus Edit to nudge room corners, Erase to delete a
+  // wall (merging the two same-department rooms it divides), and Scribble / Text to annotate.
+  ROOMS: new Set<ToolMode>(['PAN', 'VECTOR', 'ERASE', 'DRAW', 'TEXT']),
+  // Intent layer: same draw tools, plus the Intent Pin (gated separately in ToolBtn).
+  INTENT: new Set<ToolMode>(DRAW_TOOLS),
 }
 
 function ToolBtn({ tool }: { tool: ToolDef }) {
   const toolMode = useDrawingStore((s) => s.toolMode)
   const setTool = useDrawingStore((s) => s.setTool)
   const activeLayer = useDrawingStore((s) => s.activeLayer)
-  const setShowIntentLabels = useDrawingStore((s) => s.setShowIntentLabels)
-  const setShowIntentGrid = useDrawingStore((s) => s.setShowIntentGrid)
   const { key, label, Icon } = tool
   const active = toolMode === key
   const allowed = LAYER_ENABLED_TOOLS[activeLayer]
-  const disabled = allowed != null && !allowed.has(key)
-  // Hovering Intent Pin previews the pin labels AND the region concentration grid.
-  const hoverIntent = (show: boolean) => {
-    setShowIntentLabels(show)
-    setShowIntentGrid(show)
-  }
+  // The Dept tool unlocks only on the Departments layer; the Intent Pin and the Lock tool only
+  // on the Rooms layer — disabled (greyed) in every other stage. All remaining tools follow the
+  // per-layer allowlist (absent layer ⇒ all enabled).
+  const disabled =
+    key === 'INTENT_PIN' || key === 'LASSO_LOCK'
+      ? activeLayer !== 'ROOMS'
+      : key === 'DEPT'
+        ? activeLayer !== 'DEPARTMENTS'
+        : allowed != null && !allowed.has(key)
+  // (The intent concentration-grid preview now lives on hover of the contextual "Adjust" button.)
   return (
     <button
       type="button"
@@ -93,8 +101,6 @@ function ToolBtn({ tool }: { tool: ToolDef }) {
       disabled={disabled}
       title={disabled ? `${label} — not available in this layer` : label}
       onClick={() => setTool(key)}
-      onMouseEnter={key === 'INTENT_PIN' && !disabled ? () => hoverIntent(true) : undefined}
-      onMouseLeave={key === 'INTENT_PIN' && !disabled ? () => hoverIntent(false) : undefined}
     >
       <Icon size={16} strokeWidth={1.75} />
       <span className="rail-btn-label">{label}</span>
@@ -148,6 +154,25 @@ function ExportDropdown() {
   )
 }
 
+/** Program Sheet — a SUBTLE pill button (not a drawing tool): it opens the space-programming
+ *  grid panel, so it's styled distinctly from the tool buttons. Sits after Export. */
+function ProgramSheetButton() {
+  const view = useProgramSheet((s) => s.view)
+  const toggle = useProgramSheet((s) => s.toggle)
+  return (
+    <button
+      type="button"
+      className={`rail-sheet-btn${view !== 'closed' ? ' is-open' : ''}`}
+      aria-pressed={view !== 'closed'}
+      title="Program Sheet — space programming grid"
+      onClick={() => toggle()}
+    >
+      <Table size={14} strokeWidth={1.9} />
+      <span>Program Sheet</span>
+    </button>
+  )
+}
+
 export function Ribbon() {
   return (
     <div className="toolbar-rail">
@@ -156,12 +181,19 @@ export function Ribbon() {
       <div className="rail-sep" />
       {GROUP_DRAW.map((t) => <ToolBtn key={t.key} tool={t} />)}
 
+      {/* Dept is fenced by separators on BOTH sides (unlocks only on the Departments layer). */}
       <div className="rail-sep" />
-      {REST_TOOLS.map((t) => <ToolBtn key={t.key} tool={t} />)}
-      <ToolBtn tool={{ key: 'INTENT_PIN', label: 'Intent Pin', Icon: MapPin }} />
-      {/* Color & Pen options now live in the per-tool contextual bar (see
-          ContextualBar). Export sits directly after the Intent Pin button. */}
+      <ToolBtn tool={{ key: 'DEPT', label: 'Dept', Icon: Building2 }} />
+      <div className="rail-sep" />
+
+      {/* Lock then Intent Pin (both Rooms-only, gated in ToolBtn). */}
+      <ToolBtn tool={LOCK_TOOL} />
+      <ToolBtn tool={INTENT_PIN_TOOL} />
+
+      {/* | then Export, then the subtle Program Sheet pill. */}
+      <div className="rail-sep" />
       <ExportDropdown />
+      <ProgramSheetButton />
     </div>
   )
 }

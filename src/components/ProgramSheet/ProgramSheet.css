@@ -1,0 +1,379 @@
+/* Program Sheet (document_int.txt §1) — split-screen column or full-screen overlay modal.
+   Matches the monochrome design-tool chrome (var tokens from index.css). */
+
+.program-sheet {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  color: var(--text);
+  overflow: hidden;
+}
+
+/* Split-screen: a column beside the canvas (canvas left, sheet right), before the layer panel. */
+.program-sheet--split {
+  flex: 0 0 clamp(340px, 38%, 560px);
+  border-left: 1px solid var(--panel-border);
+}
+
+/* Full-screen: a high-density overlay modal above the whole app. */
+.program-sheet--full {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  box-shadow: var(--panel-shadow);
+}
+
+/* ---- Header ---- */
+.ps-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 10px 0 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.ps-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.ps-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ps-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.ps-icon-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* ---- Tabs ---- */
+.ps-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.ps-tab {
+  position: relative;
+  border: none;
+  background: transparent;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms ease;
+}
+
+.ps-tab:hover {
+  color: var(--text);
+}
+
+.ps-tab.is-active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ps-tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+
+/* ---- Body ---- */
+.ps-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+  position: relative;
+}
+
+.ps-tab-pane {
+  padding: 12px 14px 16px;
+}
+
+.ps-empty {
+  padding: 24px 16px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+/* ---- Data table ---- */
+.ps-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.ps-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--panel-border);
+  padding: 7px 8px;
+  white-space: nowrap;
+}
+
+.ps-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--panel-border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.ps-table tbody tr:hover {
+  background: var(--hover);
+}
+
+.ps-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Resizable columns: fixed layout so <col> widths are authoritative; cells clip overflow so a
+   narrow column ellipsizes and widening it (drag the header edge) reveals the rest. */
+.ps-table--resizable {
+  table-layout: fixed;
+}
+
+.ps-table--resizable th,
+.ps-table--resizable td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The drag handle sits on each header's right edge; the sticky <th> is its positioning context. */
+.ps-col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.ps-col-resize::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 100ms ease;
+}
+
+.ps-col-resize:hover::after,
+.ps-col-resize:active::after {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.ps-center {
+  text-align: center;
+}
+
+.ps-dim {
+  color: var(--text-dim);
+}
+
+.ps-neg {
+  color: #dc2626;
+}
+
+.ps-row-strong td {
+  font-weight: 700;
+}
+
+.ps-row-locked td {
+  background: rgba(31, 41, 55, 0.05);
+}
+
+.ps-col-n {
+  width: 76px;
+}
+
+/* Name cell content: swatch + inline editable name. This is an inner <div> (NOT the <td>) —
+   `display: flex` on a <td> stops it stretching to the row height, which shifts that row's
+   content out of line with the other cells. The <td> stays a proper table-cell. */
+.ps-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0; /* let the editable input shrink inside the clipped (overflow:hidden) cell */
+}
+
+/* Keep in-cell controls vertically centered with the text in the other cells. */
+.ps-table .ps-cell-input,
+.ps-table input[type='checkbox'],
+.ps-table .ps-row-actions {
+  vertical-align: middle;
+}
+
+.ps-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+/* "Referenced from sheet" constraint chip (department pin sized from a target). */
+.ps-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--panel-2);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* Per-row Split / Merge actions. */
+.ps-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ps-icon-btn--sm {
+  width: 22px;
+  height: 22px;
+}
+
+.ps-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* In-cell editable inputs. */
+.ps-cell-input {
+  width: 100%;
+  min-width: 48px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  padding: 3px 5px;
+  font: inherit;
+  color: var(--text);
+}
+
+.ps-num .ps-cell-input {
+  text-align: right;
+}
+
+.ps-cell-input:hover {
+  border-color: var(--panel-border);
+}
+
+.ps-cell-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--panel);
+}
+
+/* ---- Footers / hints ---- */
+.ps-hint {
+  margin: 12px 2px 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+.ps-tab-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.ps-foot-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.ps-foot-btn:hover {
+  background: var(--hover);
+}
+
+/* ---- Advisory HUD (rejected input, §4.3) ---- */
+.ps-advisory {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: 6px;
+  background: #fdecea;
+  border: 1px solid #f5c2bc;
+  color: #b42318;
+  font-size: 12px;
+  box-shadow: var(--panel-shadow);
+}
+
+/* ---- MenuBar "Program Sheet" button (lives in the header next to File/Document) ---- */
+.menu-sheet-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

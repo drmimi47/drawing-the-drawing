@@ -2,18 +2,26 @@ import { create } from 'zustand'
 import type {
   Boundary,
   CirculationPath,
+  CirculationTier,
+  Department,
+  DepartmentType,
   Graph,
   IntentPin,
   IntentType,
   LineStyle,
   LockPolygon,
   RawSample,
+  Room,
   SamplePoint,
   ScribbleStroke,
   SnapGuide,
   TextLabel,
 } from '../types/geometry'
-import { emptyGraph } from '../types/geometry'
+import { emptyGraph, DEPARTMENT_META, FIXED_COLOR_DEPT_TYPES } from '../types/geometry'
+import { generateRooms } from '../geometry/rooms'
+import { findEdgeSplits, applyEdgeSplits, buildDragRig, type DragRig, type VertexUpdate } from '../geometry/roomEdit'
+import { mergeRoomsAtWall, mergeRoomWithNeighbor } from '../geometry/roomMerge'
+import { splitRoom as splitRoomGeom } from '../geometry/roomSplit'
 import {
   addStrokeToGraph,
   eraseGraphCapsule,
@@ -27,6 +35,9 @@ import { buildSnapIndex, type SpatialGrid, type ExtraPolyline } from '../geometr
 import { buildCirculationMask } from '../geometry/corridor'
 import { clipPolylineToPolygon } from '../geometry/clipPolyline'
 import { nearestBoundarySegment, eraseBoundarySegment } from '../geometry/boundaryEdit'
+import { scaleRingToArea, sqftToWorldArea, polygonAreaWorld, worldAreaToSqft } from '../geometry/area'
+import { getIntentConcentration } from '../utils/metaballField'
+import { pointInPolygon } from '../geometry/locks'
 
 /**
  * Central canvas + tool state (Cluster D).
@@ -46,10 +57,11 @@ export type ToolMode =
   | 'VECTOR'
   | 'LASSO_LOCK'
   | 'INTENT_PIN'
+  | 'DEPT'
   | 'TEXT'
 
 /**
- * Gradia Draw restructure (restructure_v1.txt) — the guided constraint-accumulating
+ * Gradia restructure (restructure_v1.txt) — the guided constraint-accumulating
  * pipeline. The active layer is surfaced by the right-panel Layer Navigator
  * (Foundation A) and gates the workflow top-down while staying revisitable.
  */
@@ -59,7 +71,7 @@ export type PipelineLayer =
   | 'CIRCULATION'
   | 'DEPARTMENTS'
   | 'ROOMS'
-  | 'GENERATE'
+  | 'INTENT'
 
 /** Drawing substrate chosen in Stage 0 (Context): real map vs blank artboard. */
 export type CanvasContext = 'MAP' | 'BLANK'
@@ -74,7 +86,7 @@ export const LAYER_ORDER: PipelineLayer[] = [
   'CIRCULATION',
   'DEPARTMENTS',
   'ROOMS',
-  'GENERATE',
+  'INTENT',
 ]
 
 /** Default artboard size in world units (3:2 landscape, ARCH-D-like). */
@@ -117,6 +129,9 @@ export interface CanvasDoc {
   graph: Graph
   lockPolygons: LockPolygon[]
   intentPins: IntentPin[]
+  departments: Department[]
+  rooms: Room[]
+  lotGridSeams: { x: number; y: number }[][]
   textLabels: TextLabel[]
   scribbles: ScribbleStroke[]
   boundary: Boundary | null
@@ -133,6 +148,7 @@ export interface CanvasDoc {
   gridSpacing: number
   boundaryInfillOpacity: number
   circulationWidth: number
+  circulationMinorWidth: number
   metersPerWorldUnit: number | null
   mapActive: boolean
   mapDim: number
@@ -184,12 +200,29 @@ const SELECTION_TOOLS = new Set<ToolMode>(['SELECT', 'LASSO'])
 
 let lockCounter = 0
 let pinCounter = 0
+let deptCounter = 0
 let textCounter = 0
 let circulationCounter = 0
 let scribbleCounter = 0
 let canvasCounter = 0
+let roomActionSeq = 0
+
+/** Wyvill footprint constant: an isolated department field clears the area-threshold out to
+ *  ~0.732·radius, so its footprint area ≈ FOOTPRINT_K·radius². Used to size a pin from a sheet
+ *  target SQF (inverse: radius ≈ √(targetArea / FOOTPRINT_K)). */
+const FOOTPRINT_K = Math.PI * 0.536
+
+/** Intent "Adjust": a fully-Density area adds up to this many rooms to a department; a fully-
+ *  Openness area removes up to this many (like clicking the room-count up/down). */
+const MAX_INTENT_DELTA = 4
+const INTENT_COUNT_CAP = 60
+/** Minimum averaged intent field over a department before "Adjust" touches its room count. */
+const INTENT_MIN_TOTAL = 0.15
 
 const HISTORY_LIMIT = 100
+/** Rooms a department starts with the first time the Rooms layer is opened, when the user
+ *  hasn't set a grain or count yet (dev/testing default — deterministic, not grain-derived). */
+const DEFAULT_ROOM_COUNT = 6
 
 /**
  * One undo/redo step. Captures the FULL multi-board world at the moment before an
@@ -213,6 +246,19 @@ export interface PendingText {
   /** Existing label id when editing, else null for a new one. */
   id: string | null
   initial: string
+}
+
+/** Transient state while placing a department zone (center → drag radius → commit). */
+/** Transient state while placing a department (center → type → radius → commit). */
+export interface PendingDept {
+  x: number
+  y: number
+  /** Screen position of the placement click, for positioning the type popup. */
+  screenX: number
+  screenY: number
+  phase: 'type' | 'radius'
+  deptType: DepartmentType | null
+  radius: number
 }
 
 /** Transient state while placing an intent pin (center → type → radius → commit). */
@@ -246,6 +292,13 @@ interface DrawingState {
   intentPins: IntentPin[]
   /** Transient pin being placed, or null. */
   pendingPin: PendingPin | null
+  /** Department zones (Stage 3) — blending program fields masked to boundary∩¬circ. */
+  departments: Department[]
+  /** Transient department being placed (center set, sizing radius), or null. */
+  pendingDept: PendingDept | null
+  /** Generated room sub-polygons (Stage 4), each owned by a parent department. */
+  rooms: Room[]
+  lotGridSeams: { x: number; y: number }[][]
   /** Free-floating text annotations. */
   textLabels: TextLabel[]
   /** Transient text being placed/edited, or null. */
@@ -278,7 +331,7 @@ interface DrawingState {
   mapGeometry: GeoJSON.FeatureCollection | null
   /** Active CAD snap guide emitted by the polyline snapping pipeline (Step 1). */
   activeSnapGuide: SnapGuide | null
-  /** Active pipeline layer (Gradia Draw restructure — right-panel Layer Navigator). */
+  /** Active pipeline layer (Gradia restructure — right-panel Layer Navigator). */
   activeLayer: PipelineLayer
   /** Highest layer index the user has reached; gates the sequential unlock (they
    *  can revisit any reached layer and step forward one at a time). */
@@ -292,16 +345,34 @@ interface DrawingState {
   boundary: Boundary | null
   /** Opacity (0..1) of the lot-boundary interior fill. */
   boundaryInfillOpacity: number
+  /** Show the edge-aligned structural grid inside the closed lot (Boundary layer). */
+  lotGridVisible: boolean
+  /** Show the placed Intent Pins + their metaball field on the Rooms layer (panel toggle). */
+  intentPinsVisible: boolean
+  /** Structural grid module spacing (world units). */
+  lotGridSpacing: number
   /** Circulation centerlines (Stage 2). */
   circulationPaths: CirculationPath[]
-  /** Global corridor width (world units) applied to new/unlocked paths. */
+  /** Main corridor width (world units) applied to new/unlocked MAIN paths. */
   circulationWidth: number
-  /** Derived keep-out mask: one band ring per path (point-in-any-band). Null when
-   *  there are no corridors. Recomputed whenever the circulation set changes. */
-  circulationMask: { x: number; y: number }[][] | null
+  /** Minor (smaller) corridor width applied to new/unlocked MINOR paths. */
+  circulationMinorWidth: number
+  /** Which pathway tier the Polyline tool draws on the Circulation layer. */
+  circulationTier: CirculationTier
+  /** Derived MAIN keep-out mask: one band ring per MAIN path (point-in-any-band).
+   *  Null when there are no main corridors. The Stage-3 department hard-mask subtracts
+   *  this. Recomputed whenever the circulation set changes. */
+  mainCirculationMask: { x: number; y: number }[][] | null
+  /** Derived MINOR keep-out mask (smaller connectors). Cached for the Stage-4 room
+   *  carve-out; department fields are permeable to it. Null when none. */
+  minorCirculationMask: { x: number; y: number }[][] | null
   /** Master object-snapping switch (Cluster 4). When false, the Polyline and
    *  Vector-Edit snap pipelines short-circuit to raw pointer input. Default on. */
   snappingEnabled: boolean
+  /** Polyline construction GUIDES (perp/parallel/intersection/midpoint/extension/track +
+   *  their visuals). When off, those guides are suppressed but vertex-to-vertex and
+   *  vertex-to-edge object snaps still engage (silently). Default on. */
+  snapGuidesEnabled: boolean
   /** Object-snap tracking (O-TRACK) anchors acquired by the Polyline tool by
    *  hovering a vertex/midpoint. Capped at 2; alignment rays project from these.
    *  Transient — cleared on path completion, cancel, or leaving the polyline tool. */
@@ -330,6 +401,7 @@ interface DrawingState {
   /** Flip the master snapping switch. Clears any live guide when turning off so
    *  on-canvas cues vanish instantly. */
   toggleSnapping: () => void
+  setSnapGuidesEnabled: (on: boolean) => void
   /** Acquire an O-TRACK anchor (no-op if already tracked); caps at 2, dropping
    *  the oldest. */
   addTrackedPoint: (id: string, coords: [number, number]) => void
@@ -347,16 +419,30 @@ interface DrawingState {
   setBoundary: (ring: { x: number; y: number }[]) => void
   /** Remove the lot boundary (no-op if locked). */
   clearBoundary: () => void
-  /** Set the advisory target area (drives the delta readout); undefined clears it. */
+  /** Set the target area (drives the delta readout + the area lock); undefined clears it. */
   setBoundaryTargetSqf: (sqf: number | undefined) => void
+  /** Re-fit the closed lot to its target area by uniformly scaling about its centroid
+   *  (shape preserved). No-op without a positive target on a closed ring. Undoable. */
+  fitBoundaryToTarget: () => void
   /** Set the lot-boundary interior fill opacity (0..1). */
   setBoundaryInfillOpacity: (opacity: number) => void
+  setLotGridVisible: (visible: boolean) => void
+  setIntentPinsVisible: (visible: boolean) => void
+  setLotGridSpacing: (spacing: number) => void
+  /** Add a grid seam (open polyline) that splits the lot grid into regions. Undoable. */
+  addLotGridSeam: (points: { x: number; y: number }[]) => void
+  /** Remove all grid seams (back to a single grid). Undoable. */
+  clearLotGridSeams: () => void
   /** Add a circulation centerline (uses the current global width); rebuilds mask. */
   addCirculationPath: (centerline: { x: number; y: number }[]) => void
   /** Remove all circulation paths; rebuilds mask. */
   clearCirculation: () => void
-  /** Set the global corridor width; re-offsets paths + rebuilds mask. */
+  /** Set the MAIN corridor width; re-offsets MAIN paths + rebuilds masks. */
   setCirculationWidth: (width: number) => void
+  /** Set the MINOR corridor width; re-offsets MINOR paths + rebuilds masks. */
+  setCirculationMinorWidth: (width: number) => void
+  /** Choose which tier new polyline circulation paths are drawn at. */
+  setCirculationTier: (tier: CirculationTier) => void
   setColor: (color: string) => void
   setBaseWidth: (width: number) => void
   setLineStyle: (style: LineStyle) => void
@@ -370,12 +456,73 @@ interface DrawingState {
   removeLock: (id: string) => void
   clearLocks: () => void
   removeIntentPin: (id: string) => void
+  /** Live-move an intent pin (Edit tool drag; no per-move history). */
+  setIntentPinPoint: (id: string, x: number, y: number) => void
+  /** Erase the first intent pin within `r` of (x,y) — only on the Intent layer. Its
+   *  own undo step; returns true if a pin was removed (mirrors eraseSegmentAt). */
+  eraseIntentPinAt: (x: number, y: number, r: number) => boolean
   // Intent pin placement flow.
   beginPin: (x: number, y: number, screenX: number, screenY: number) => void
   setPinType: (intentType: IntentType) => void
   setPinRadius: (radius: number) => void
   commitPin: () => void
   cancelPin: () => void
+  // Department zone placement flow (Stage 3) + edits: center → type popup → radius → commit.
+  beginDept: (x: number, y: number, screenX: number, screenY: number) => void
+  setDeptType: (deptType: DepartmentType) => void
+  setDeptRadius: (radius: number) => void
+  commitDept: () => void
+  cancelDept: () => void
+  removeDepartment: (id: string) => void
+  /** Erase the first department within `r` of (x,y) — only on the Departments layer. Its
+   *  own undo step; regenerates rooms; returns true if one was removed. */
+  eraseDepartmentAt: (x: number, y: number, r: number) => boolean
+  /** Erase the room WALL under (x,y) — only on the Rooms layer: merges the two same-department
+   *  rooms sharing that wall into one (count drops; the survivor fills the space in the dept
+   *  color). Its own undo step; returns true if a wall was erased. */
+  eraseRoomWallAt: (x: number, y: number, r: number) => boolean
+  /** Live-move a department center (Edit tool drag; no per-move history). */
+  setDepartmentPoint: (id: string, x: number, y: number) => void
+  renameDepartment: (id: string, name: string) => void
+  setDepartmentColor: (id: string, color: string) => void
+  setDepartmentTarget: (id: string, targetSqf: number | undefined) => void
+  /** Set a department's parametric room count N (manual override; clears grain) and
+   *  regenerate its rooms (Stage 4). */
+  setRoomCount: (deptId: string, n: number) => void
+  /** Set a department's subdivision grain ∈ [0,1] (0 = open-plan, 1 = cellular) — the primary
+   *  room control; the effective room count is derived from the footprint area. Clears any
+   *  manual roomCount and regenerates (Stage 4). */
+  setDeptGrain: (deptId: string, grain: number) => void
+  /** "Adjust": nudge each department's ROOM COUNT from the placed Intent Pins — Density-dominant
+   *  areas add rooms, Openness-dominant remove them (like clicking the count up/down). Locked
+   *  rooms are ignored; regenerates. */
+  applyIntentToRooms: () => void
+  /** Toggle a room's locked (frozen) state. Locked rooms survive regeneration and become
+   *  keep-outs the unlocked rooms reflow around (4.5.2). No reflow on toggle. */
+  toggleRoomLock: (roomId: string) => void
+  /** Lock tool on the Rooms layer: toggle the lock of the room whose interior contains (x,y).
+   *  Locked rooms are shielded from the Intent "Adjust" regeneration. */
+  toggleRoomLockAt: (x: number, y: number) => void
+  /** Unlock every locked room (one undo step). */
+  clearRoomLocks: () => void
+  /** Program Sheet (§3 TAB 3): give a room a name (transient — cleared on regeneration). */
+  renameRoom: (roomId: string, name: string) => void
+  /** Program Sheet "Split Room" (§3 TAB 3 / Stage 4.4): bisect one room into two grid-aligned
+   *  equal-area halves in place (no full re-slice). */
+  splitRoom: (roomId: string) => void
+  /** Program Sheet "Merge" (§3 TAB 3): merge a room into its best adjacent same-department
+   *  neighbor in place. */
+  mergeRoom: (roomId: string) => void
+  /** Program Sheet (§3 TAB 2): set a department's target SQF AND fit its pin diameter to that
+   *  target (the sheet "constrains" the pin), regenerating rooms. Clearing the target frees it. */
+  applyDepartmentTarget: (id: string, targetSqf: number | undefined) => void
+  /** Begin a Rooms-layer corner drag at (x, y): split any neighbor edge passing through the
+   *  point (T-junction stickiness) and return the drag rig (welded anchors + sliding
+   *  T-junction vertices) that moves together so no gaps open. */
+  beginRoomCornerDrag: (x: number, y: number, eps: number) => DragRig
+  /** Apply per-vertex moves from a Rooms-layer corner drag — manual edit (transient;
+   *  overwritten on the next room regeneration). One undo step is bracketed by the hook. */
+  setRoomVertices: (updates: VertexUpdate[]) => void
   // Text placement flow.
   beginText: (x: number, y: number, screenX: number, screenY: number, id: string | null, initial: string) => void
   commitText: (value: string) => void
@@ -451,6 +598,10 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   lockPolygons: [],
   intentPins: [],
   pendingPin: null,
+  departments: [],
+  pendingDept: null,
+  rooms: [],
+  lotGridSeams: [],
   textLabels: [],
   pendingText: null,
   scribbles: [],
@@ -473,10 +624,17 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
   gridSpacing: 32,
   boundary: null,
   boundaryInfillOpacity: 0.15,
+  lotGridVisible: true,
+  intentPinsVisible: true,
+  lotGridSpacing: 32,
   circulationPaths: [],
   circulationWidth: 12,
-  circulationMask: null,
+  circulationMinorWidth: 6,
+  circulationTier: 'MAIN',
+  mainCirculationMask: null,
+  minorCirculationMask: null,
   snappingEnabled: true,
+  snapGuidesEnabled: true,
   trackedPoints: [],
   past: [],
   future: [],
@@ -538,6 +696,11 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       // Turning snapping OFF should wipe any guide still on screen.
       activeSnapGuide: state.snappingEnabled ? null : state.activeSnapGuide,
     })),
+  setSnapGuidesEnabled: (on) =>
+    set((state) => ({
+      snapGuidesEnabled: on,
+      activeSnapGuide: on ? state.activeSnapGuide : null, // clear any visible guide when turning off
+    })),
   addTrackedPoint: (id, coords) =>
     set((state) => {
       if (state.trackedPoints.some((p) => p.id === id)) return {}
@@ -576,10 +739,29 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       return base
     }),
   setActiveLayer: (layer) =>
-    set((state) => ({
-      activeLayer: layer,
-      maxLayerReached: Math.max(state.maxLayerReached, LAYER_ORDER.indexOf(layer)),
-    })),
+    set((state) => {
+      const base = {
+        activeLayer: layer,
+        maxLayerReached: Math.max(state.maxLayerReached, LAYER_ORDER.indexOf(layer)),
+      }
+      // Cascade (restructure_v2 4.5): rooms are derived from the boundary, circulation,
+      // and departments — all edited on OTHER layers. Re-derive them on entry to the
+      // Rooms layer so a moved/resized department or an edited corridor re-flows the
+      // rooms automatically (locked rooms are preserved; isLocked editing lands later).
+      if (layer === 'ROOMS' && state.departments.length > 0) {
+        // Any department with no room intent yet defaults to DEFAULT_ROOM_COUNT rooms (a fixed
+        // dev/testing default), so opening the layer immediately fills every department. An
+        // explicit grain or manual roomCount (incl. 0) the user set earlier is kept; once the
+        // user drags the grain slider, grain takes over as the primary control.
+        const departments = state.departments.map((d) =>
+          d.grain == null && d.roomCount == null
+            ? { ...d, roomCount: DEFAULT_ROOM_COUNT }
+            : d,
+        )
+        return { ...base, departments, rooms: regenRooms(state, departments) }
+      }
+      return base
+    }),
   setContext: (ctx) => set({ context: ctx, mapActive: ctx === 'MAP' }),
   setGridType: (type) => set({ gridType: type }),
   setGridSpacing: (spacing) => set({ gridSpacing: Math.max(1, Math.round(spacing) || 1) }),
@@ -608,12 +790,51 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
         future: [],
         boundary: null,
+        lotGridSeams: [], // seams referenced the old lot
       }
     }),
   setBoundaryTargetSqf: (sqf) =>
+    // Store the number only (keeps the live readout responsive while typing). The
+    // geometry re-fit happens on commit via fitBoundaryToTarget (Enter / blur), so a
+    // multi-keystroke entry like "45000" doesn't scale the lot once per character.
     set((state) => (state.boundary ? { boundary: { ...state.boundary, targetSqf: sqf } } : {})),
+  fitBoundaryToTarget: () =>
+    set((state) => {
+      const b = state.boundary
+      if (!b || b.isClosed === false || b.ring.length < 3) return {}
+      const target = b.targetSqf
+      if (target == null || target <= 0) return {}
+      const ring = scaleRingToArea(b.ring, sqftToWorldArea(target, state.metersPerWorldUnit))
+      if (samePolyline(ring, b.ring)) return {} // already on target — no empty undo step
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        boundary: { ...b, ring },
+      }
+    }),
   setBoundaryInfillOpacity: (opacity) =>
     set({ boundaryInfillOpacity: Math.max(0, Math.min(1, opacity)) }),
+  setLotGridVisible: (visible) => set({ lotGridVisible: visible }),
+  setIntentPinsVisible: (visible) => set({ intentPinsVisible: visible }),
+  setLotGridSpacing: (spacing) => set({ lotGridSpacing: Math.max(4, Math.round(spacing) || 4) }),
+  addLotGridSeam: (points) =>
+    set((state) => {
+      if (points.length < 2) return {}
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        lotGridSeams: [...state.lotGridSeams, points.map((p) => ({ x: p.x, y: p.y }))],
+      }
+    }),
+  clearLotGridSeams: () =>
+    set((state) => {
+      if (state.lotGridSeams.length === 0) return {}
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        lotGridSeams: [],
+      }
+    }),
   addCirculationPath: (centerline) =>
     set((state) => {
       if (centerline.length < 2) return {}
@@ -628,17 +849,21 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
           : [centerline.map((p) => ({ x: p.x, y: p.y }))]
       if (pieces.length === 0) return {}
       const stamp = Date.now()
+      // New paths inherit the active tier and its corresponding width.
+      const tier = state.circulationTier
+      const width = tier === 'MINOR' ? state.circulationMinorWidth : state.circulationWidth
       const newPaths: CirculationPath[] = pieces.map((pts) => ({
         id: `circ-${stamp}-${circulationCounter++}`,
         centerline: pts,
-        width: state.circulationWidth,
+        width,
+        tier,
       }))
       const circulationPaths = [...state.circulationPaths, ...newPaths]
       return {
         past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
         future: [],
         circulationPaths,
-        circulationMask: buildCirculationMask(circulationPaths),
+        ...circMasks(circulationPaths),
       }
     }),
   clearCirculation: () =>
@@ -648,19 +873,36 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
         future: [],
         circulationPaths: [],
-        circulationMask: null,
+        mainCirculationMask: null,
+        minorCirculationMask: null,
       }
     }),
   setCirculationWidth: (width) =>
     set((state) => {
       const w = Math.max(1, width)
-      const circulationPaths = state.circulationPaths.map((p) => ({ ...p, width: w }))
+      // Re-offset only MAIN paths (tier absent ⇒ MAIN for back-compat).
+      const circulationPaths = state.circulationPaths.map((p) =>
+        p.tier === 'MINOR' ? p : { ...p, width: w },
+      )
       return {
         circulationWidth: w,
         circulationPaths,
-        circulationMask: circulationPaths.length ? buildCirculationMask(circulationPaths) : null,
+        ...circMasks(circulationPaths),
       }
     }),
+  setCirculationMinorWidth: (width) =>
+    set((state) => {
+      const w = Math.max(1, width)
+      const circulationPaths = state.circulationPaths.map((p) =>
+        p.tier === 'MINOR' ? { ...p, width: w } : p,
+      )
+      return {
+        circulationMinorWidth: w,
+        circulationPaths,
+        ...circMasks(circulationPaths),
+      }
+    }),
+  setCirculationTier: (tier) => set({ circulationTier: tier }),
   setColor: (color) => set({ strokeColor: color }),
   setBaseWidth: (width) => set({ baseWidth: width }),
   setLineStyle: (style) => set({ lineStyle: style }),
@@ -723,6 +965,82 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       future: [],
       intentPins: state.intentPins.filter((p) => p.id !== id),
     })),
+  setIntentPinPoint: (id, x, y) =>
+    set((state) => {
+      let changed = false
+      const intentPins = state.intentPins.map((p) => {
+        if (p.id !== id) return p
+        changed = true
+        return { ...p, x, y }
+      })
+      return changed ? { intentPins } : {}
+    }),
+  eraseIntentPinAt: (x, y, r) => {
+    const state = get()
+    // Intent pins now live on the Rooms layer, so they're only erasable there.
+    if (state.activeLayer !== 'ROOMS') return false
+    const r2 = r * r
+    const hit = state.intentPins.find((p) => {
+      const dx = p.x - x
+      const dy = p.y - y
+      return dx * dx + dy * dy <= r2
+    })
+    if (!hit) return false
+    set((s) => ({
+      past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
+      future: [],
+      intentPins: s.intentPins.filter((p) => p.id !== hit.id),
+    }))
+    return true
+  },
+  eraseDepartmentAt: (x, y, r) => {
+    const state = get()
+    // Departments are the Departments layer's content, so they're only erasable there.
+    if (state.activeLayer !== 'DEPARTMENTS') return false
+    const r2 = r * r
+    const hit = state.departments.find((d) => {
+      const dx = d.x - x
+      const dy = d.y - y
+      return dx * dx + dy * dy <= r2
+    })
+    if (!hit) return false
+    set((s) => {
+      const departments = s.departments.filter((d) => d.id !== hit.id)
+      return {
+        past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
+        future: [],
+        departments,
+        // Regenerate so neighbors reflow into the freed space (mirrors removeDepartment).
+        rooms: regenRooms(s, departments),
+      }
+    })
+    return true
+  },
+  eraseRoomWallAt: (x, y, r) => {
+    const state = get()
+    // Walls belong to the Rooms layer; no-op elsewhere so the eraser can try this safely.
+    if (state.activeLayer !== 'ROOMS') return false
+    const res = mergeRoomsAtWall(state.rooms, x, y, r)
+    if (!res) return false
+    set((s) => {
+      // Pin every AFFECTED department's target to its new room count (clearing grain, like
+      // setRoomCount) so the displayed counts stay consistent and a later regen won't silently
+      // re-add the wall. (Erasing a department-border wall changes both departments' counts.)
+      // The merge geometry itself is transient — overwritten on the next regeneration.
+      const departments = s.departments.map((d) =>
+        res.affected.includes(d.id)
+          ? { ...d, roomCount: res.rooms.filter((rm) => rm.parentDeptId === d.id).length, grain: undefined }
+          : d,
+      )
+      return {
+        past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
+        future: [],
+        rooms: res.rooms,
+        departments,
+      }
+    })
+    return true
+  },
 
   beginPin: (x, y, screenX, screenY) =>
     set({ pendingPin: { x, y, screenX, screenY, phase: 'type', intentType: null, radius: 40 } }),
@@ -751,6 +1069,287 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       }
     }),
   cancelPin: () => set({ pendingPin: null }),
+
+  beginDept: (x, y, screenX, screenY) =>
+    set({ pendingDept: { x, y, screenX, screenY, phase: 'type', deptType: null, radius: 60 } }),
+  setDeptType: (deptType) =>
+    set((state) => (state.pendingDept ? { pendingDept: { ...state.pendingDept, deptType, phase: 'radius' } } : {})),
+  setDeptRadius: (radius) =>
+    set((state) => (state.pendingDept ? { pendingDept: { ...state.pendingDept, radius } } : {})),
+  commitDept: () =>
+    set((state) => {
+      const p = state.pendingDept
+      if (!p || !p.deptType) return { pendingDept: null }
+      const meta = DEPARTMENT_META[p.deptType]
+      const dept: Department = {
+        id: `dept-${Date.now()}-${deptCounter++}`,
+        deptType: p.deptType,
+        // Named + colored from the chosen program type (name editable in the panel; the
+        // color is fixed for service types like Core/Mechanical, otherwise editable).
+        name: meta.label,
+        x: p.x,
+        y: p.y,
+        radius: Math.max(12, p.radius),
+        color: meta.color,
+      }
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        departments: [...state.departments, dept],
+        pendingDept: null,
+      }
+    }),
+  cancelDept: () => set({ pendingDept: null }),
+  removeDepartment: (id) =>
+    set((state) => {
+      const departments = state.departments.filter((d) => d.id !== id)
+      // Regenerate so neighboring departments' power cells reflow into the freed space.
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        departments,
+        rooms: regenRooms(state, departments),
+      }
+    }),
+  setRoomCount: (deptId, n) =>
+    set((state) => {
+      if (!state.departments.some((d) => d.id === deptId)) return {}
+      const count = Math.max(0, Math.floor(n))
+      // Room domains are a power-diagram partition over the whole plan (Pass 1), so a
+      // change re-derives every department's rooms together — each respects main
+      // corridors as hard walls and never overlaps a neighbor. Typing an explicit N clears
+      // grain so the count is taken verbatim (grain is the derived-count control).
+      const departments = state.departments.map((d) =>
+        d.id === deptId ? { ...d, roomCount: count, grain: undefined } : d,
+      )
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        departments,
+        rooms: regenRooms(state, departments),
+      }
+    }),
+  setDeptGrain: (deptId, grain) =>
+    set((state) => {
+      if (!state.departments.some((d) => d.id === deptId)) return {}
+      const g = Math.min(1, Math.max(0, grain))
+      // grain is the PRIMARY room control: the generator derives each department's effective
+      // room count from its footprint area and grain (open-plan → few large, cellular → many
+      // small). Setting grain clears any manual roomCount override.
+      const departments = state.departments.map((d) =>
+        d.id === deptId ? { ...d, grain: g, roomCount: undefined } : d,
+      )
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        departments,
+        rooms: regenRooms(state, departments),
+      }
+    }),
+  applyIntentToRooms: () =>
+    set((state) => {
+      if (state.intentPins.length === 0) return {}
+      // Intent "Adjust" nudges each department's ROOM COUNT exactly like the user clicking the
+      // count up/down: where the painted field is DENSITY-dominant over a department's rooms it
+      // adds rooms, where it's OPENNESS-dominant it removes them. Locked rooms are ignored (kept
+      // as keep-outs by regenRooms; only the UNLOCKED count is the baseline that moves).
+      const roomsByDept = new Map<string, Room[]>()
+      for (const r of state.rooms) {
+        const arr = roomsByDept.get(r.parentDeptId)
+        if (arr) arr.push(r)
+        else roomsByDept.set(r.parentDeptId, [r])
+      }
+      const departments = state.departments.map((d) => {
+        const drooms = roomsByDept.get(d.id) ?? []
+        // Sample the intent over the department's ROOMS (their centroids) — i.e. "how much of
+        // this department sits in the painted area" — falling back to the pin if it has no rooms.
+        const pts = drooms.length
+          ? drooms.map((r) => {
+              let cx = 0
+              let cy = 0
+              for (const p of r.polygon) {
+                cx += p.x
+                cy += p.y
+              }
+              return { x: cx / r.polygon.length, y: cy / r.polygon.length }
+            })
+          : [{ x: d.x, y: d.y }]
+        let dens = 0
+        let open = 0
+        let tot = 0
+        for (const p of pts) {
+          const { total, mix } = getIntentConcentration(p.x, p.y, state.intentPins)
+          dens += mix.DENSITY
+          open += mix.OPENNESS
+          tot += total
+        }
+        if (tot / pts.length < INTENT_MIN_TOTAL) return d // not enough intent over this department
+        const net = (dens - open) / pts.length // +1 = pure density, −1 = pure openness
+        const delta = Math.round(net * MAX_INTENT_DELTA)
+        if (delta === 0) return d
+        const base = drooms.filter((r) => !r.isLocked).length || d.roomCount || 0
+        const newCount = Math.max(1, Math.min(INTENT_COUNT_CAP, base + delta))
+        return { ...d, roomCount: newCount, grain: undefined }
+      })
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        departments,
+        rooms: regenRooms(state, departments),
+      }
+    }),
+  toggleRoomLock: (roomId) =>
+    set((state) => {
+      if (!state.rooms.some((r) => r.roomId === roomId)) return {}
+      // A freeze, not a reflow: just flip the flag (one undo step). The NEXT regeneration
+      // (grain/count change, department edit, layer re-entry) treats locked rooms as keep-outs.
+      const rooms = state.rooms.map((r) => (r.roomId === roomId ? { ...r, isLocked: !r.isLocked } : r))
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        rooms,
+      }
+    }),
+  toggleRoomLockAt: (x, y) =>
+    set((state) => {
+      if (state.activeLayer !== 'ROOMS') return {}
+      // Topmost room (later rooms render on top) whose interior contains the point.
+      let hit: Room | undefined
+      for (let i = state.rooms.length - 1; i >= 0; i--) {
+        if (pointInPolygon(x, y, state.rooms[i].polygon)) {
+          hit = state.rooms[i]
+          break
+        }
+      }
+      if (!hit) return {}
+      const id = hit.roomId
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        rooms: state.rooms.map((r) => (r.roomId === id ? { ...r, isLocked: !r.isLocked } : r)),
+      }
+    }),
+  clearRoomLocks: () =>
+    set((state) => {
+      if (!state.rooms.some((r) => r.isLocked)) return {}
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        rooms: state.rooms.map((r) => (r.isLocked ? { ...r, isLocked: false } : r)),
+      }
+    }),
+  renameRoom: (roomId, name) =>
+    set((state) => {
+      if (!state.rooms.some((r) => r.roomId === roomId)) return {}
+      const trimmed = name.trim()
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        rooms: state.rooms.map((r) => (r.roomId === roomId ? { ...r, name: trimmed || undefined } : r)),
+      }
+    }),
+  splitRoom: (roomId) =>
+    set((state) => {
+      const room = state.rooms.find((r) => r.roomId === roomId)
+      if (!room || room.isLocked) return {}
+      const res = splitRoomGeom(
+        room,
+        state.boundary,
+        state.metersPerWorldUnit,
+        `room-${Date.now()}-${roomActionSeq++}`,
+        `room-${Date.now()}-${roomActionSeq++}`,
+      )
+      if (!res) return {}
+      // Replace the one room with its two halves in place (no full department re-slice).
+      const rooms = state.rooms.flatMap((r) => (r.roomId === roomId ? [res.a, res.b] : [r]))
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        rooms,
+      }
+    }),
+  mergeRoom: (roomId) =>
+    set((state) => {
+      const res = mergeRoomWithNeighbor(state.rooms, roomId)
+      if (!res) return {}
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        rooms: res.rooms,
+      }
+    }),
+  applyDepartmentTarget: (id, targetSqf) =>
+    set((state) => {
+      if (!state.departments.some((d) => d.id === id)) return {}
+      const fit = targetSqf != null && targetSqf > 0
+      const radius = fit
+        ? Math.max(12, Math.sqrt(Math.max(1, sqftToWorldArea(targetSqf, state.metersPerWorldUnit)) / FOOTPRINT_K))
+        : null
+      // Setting a target SIZES the pin to it (the sheet constraint); clearing only drops the goal.
+      const departments = state.departments.map((d) =>
+        d.id === id ? { ...d, targetSqf, ...(radius != null ? { radius } : {}) } : d,
+      )
+      return {
+        past: [...state.past, snapshot(state)].slice(-HISTORY_LIMIT),
+        future: [],
+        departments,
+        rooms: regenRooms(state, departments),
+      }
+    }),
+  beginRoomCornerDrag: (x, y, eps) => {
+    let rig: DragRig = { anchors: [], sliders: [] }
+    set((state) => {
+      const splits = findEdgeSplits(state.rooms, x, y, eps)
+      const rooms = splits.length > 0 ? applyEdgeSplits(state.rooms, splits) : state.rooms
+      // Build the rig on the post-split rings (by position), so inserted T-junction vertices
+      // move with the original coincident corners.
+      rig = buildDragRig(rooms, x, y, eps)
+      return splits.length > 0 ? { rooms } : {}
+    })
+    return rig
+  },
+  setRoomVertices: (updates) =>
+    set((state) => {
+      if (updates.length === 0) return {}
+      const moved = new Map<string, Map<number, { x: number; y: number }>>()
+      for (const u of updates) {
+        let m = moved.get(u.roomId)
+        if (!m) moved.set(u.roomId, (m = new Map()))
+        m.set(u.index, { x: u.x, y: u.y })
+      }
+      const mpu = state.metersPerWorldUnit
+      const hasScale = mpu != null && mpu > 0
+      const rooms = state.rooms.map((r) => {
+        const m = moved.get(r.roomId)
+        if (!m) return r
+        const polygon = r.polygon.map((p, i) => m.get(i) ?? p)
+        const areaWorld = polygonAreaWorld(polygon)
+        return { ...r, polygon, areaSqf: hasScale ? worldAreaToSqft(areaWorld, mpu) : areaWorld }
+      })
+      return { rooms }
+    }),
+  setDepartmentPoint: (id, x, y) =>
+    set((state) => {
+      let changed = false
+      const departments = state.departments.map((d) => {
+        if (d.id !== id) return d
+        changed = true
+        return { ...d, x, y }
+      })
+      return changed ? { departments } : {}
+    }),
+  // Metadata edits (name/color/target) are live with no per-keystroke history.
+  renameDepartment: (id, name) =>
+    set((state) => ({ departments: state.departments.map((d) => (d.id === id ? { ...d, name } : d)) })),
+  setDepartmentColor: (id, color) =>
+    set((state) => ({
+      departments: state.departments.map((d) =>
+        // Core / Mechanical keep their fixed grey / black — never recolored.
+        d.id === id && !(d.deptType && FIXED_COLOR_DEPT_TYPES.has(d.deptType)) ? { ...d, color } : d,
+      ),
+    })),
+  setDepartmentTarget: (id, targetSqf) =>
+    set((state) => ({ departments: state.departments.map((d) => (d.id === id ? { ...d, targetSqf } : d)) })),
 
   beginText: (x, y, screenX, screenY, id, initial) =>
     set({ pendingText: { x, y, screenX, screenY, id, initial } }),
@@ -881,6 +1480,16 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       if (index < 0 || index >= ring.length) return {}
       const next = ring.slice()
       next[index] = { x, y }
+      // Area lock: with a target set on a closed lot, the corner the user grabs stays
+      // exactly where they (snapped) it, while the REST of the polygon scales uniformly
+      // about that corner to hold the target area. Scaling about the dragged vertex
+      // keeps it fixed and changes area by the square of the scale — one sqrt re-locks
+      // it each frame (no history per move, matching the rest of the drag hot path).
+      const target = state.boundary.targetSqf
+      if (target != null && target > 0 && state.boundary.isClosed !== false && next.length >= 3) {
+        const locked = scaleRingToArea(next, sqftToWorldArea(target, state.metersPerWorldUnit), next[index])
+        return { boundary: { ...state.boundary, ring: locked } }
+      }
       return { boundary: { ...state.boundary, ring: next } }
     }),
   setCirculationPoint: (pathId, index, x, y) =>
@@ -894,7 +1503,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         return { ...p, centerline }
       })
       if (!changed) return {}
-      return { circulationPaths, circulationMask: buildCirculationMask(circulationPaths) }
+      return { circulationPaths, ...circMasks(circulationPaths) }
     }),
 
   beginHistory: () =>
@@ -995,7 +1604,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
         future: [],
         circulationPaths: paths,
-        circulationMask: paths.length ? buildCirculationMask(paths) : null,
+        ...circMasks(paths),
       }
     })
     return true
@@ -1041,6 +1650,23 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
 }))
 
 /** Full multi-board world snapshot taken before any undoable action. */
+/** Re-derive rooms after an upstream change, PRESERVING locked rooms (4.5.2): the locked
+ *  rooms are kept verbatim AND fed to the generator as keep-outs, so freshly generated rooms
+ *  reflow around the regions the user has frozen instead of overlapping them. */
+function regenRooms(state: DrawingState, departments: Department[]): Room[] {
+  const locked = state.rooms.filter((r) => r.isLocked)
+  const fresh = generateRooms(
+    departments,
+    state.boundary,
+    state.circulationPaths,
+    state.metersPerWorldUnit,
+    state.lotGridSpacing,
+    state.lotGridSeams,
+    locked,
+  )
+  return [...locked, ...fresh]
+}
+
 function snapshot(state: DrawingState): HistoryEntry {
   return {
     activeDoc: captureCanvasDoc(state),
@@ -1057,10 +1683,13 @@ function restoreActiveGeometry(doc: CanvasDoc): Partial<DrawingState> {
     graph: doc.graph,
     lockPolygons: doc.lockPolygons,
     intentPins: doc.intentPins,
+    departments: doc.departments,
+    rooms: doc.rooms,
+    lotGridSeams: doc.lotGridSeams,
     textLabels: doc.textLabels,
     boundary: doc.boundary,
     circulationPaths: doc.circulationPaths,
-    circulationMask: doc.circulationPaths.length ? buildCirculationMask(doc.circulationPaths) : null,
+    ...circMasks(doc.circulationPaths),
     scribbles: doc.scribbles,
   }
 }
@@ -1111,14 +1740,37 @@ function samePolyline(a: { x: number; y: number }[], b: { x: number; y: number }
 }
 
 /**
+ * Tier-split circulation keep-out masks (restructure_v2 Stage 2.2). MAIN paths form the
+ * structural barrier the Stage-3 department hard-mask subtracts; MINOR paths are cached
+ * separately for the Stage-4 room carve-out (and are permeable to department fields).
+ * Each mask is the array of per-path band rings (point-in-any-band ⇒ inside a corridor);
+ * see corridor.ts on why this stands in for a Turf-union MultiPolygon here.
+ */
+function circMasks(paths: CirculationPath[]): {
+  mainCirculationMask: { x: number; y: number }[][] | null
+  minorCirculationMask: { x: number; y: number }[][] | null
+} {
+  const main = paths.filter((p) => p.tier !== 'MINOR')
+  const minor = paths.filter((p) => p.tier === 'MINOR')
+  return {
+    mainCirculationMask: main.length ? buildCirculationMask(main) : null,
+    minorCirculationMask: minor.length ? buildCirculationMask(minor) : null,
+  }
+}
+
+/**
  * Clip every circulation centerline to the (closed) lot boundary, keeping only the
  * parts inside it — a path that pokes out is split/shortened, one fully outside is
- * dropped. Returns the new paths + mask, or null when nothing changed (or there's
+ * dropped. Returns the new paths + masks, or null when nothing changed (or there's
  * no closed boundary / no paths, so there's nothing to trim).
  */
 function trimCirculationToBoundary(
   state: DrawingState,
-): { circulationPaths: CirculationPath[]; circulationMask: { x: number; y: number }[][] | null } | null {
+): {
+  circulationPaths: CirculationPath[]
+  mainCirculationMask: { x: number; y: number }[][] | null
+  minorCirculationMask: { x: number; y: number }[][] | null
+} | null {
   const ring = state.boundary && state.boundary.isClosed !== false ? state.boundary.ring : null
   if (!ring || ring.length < 3 || state.circulationPaths.length === 0) return null
   const out: CirculationPath[] = []
@@ -1135,11 +1787,12 @@ function trimCirculationToBoundary(
         id: `circ-${Date.now()}-${circulationCounter++}`,
         centerline: pts.map((pt) => ({ x: pt.x, y: pt.y })),
         width: p.width,
+        tier: p.tier,
       })
     }
   }
   if (!changed) return null
-  return { circulationPaths: out, circulationMask: out.length ? buildCirculationMask(out) : null }
+  return { circulationPaths: out, ...circMasks(out) }
 }
 
 // ─── Multi-canvas (design-option branches) helpers ───────────────────────────
@@ -1151,6 +1804,9 @@ function blankCanvasDoc(pageWidth: number, pageHeight: number, sheetName: string
     graph: emptyGraph(),
     lockPolygons: [],
     intentPins: [],
+    departments: [],
+    rooms: [],
+    lotGridSeams: [],
     textLabels: [],
     scribbles: [],
     boundary: null,
@@ -1166,6 +1822,7 @@ function blankCanvasDoc(pageWidth: number, pageHeight: number, sheetName: string
     gridSpacing: 32,
     boundaryInfillOpacity: 0.15,
     circulationWidth: 12,
+    circulationMinorWidth: 6,
     metersPerWorldUnit: null,
     mapActive: false,
     mapDim: 0.35,
@@ -1199,6 +1856,9 @@ function translateCanvasDoc(doc: CanvasDoc, dx: number, dy: number): CanvasDoc {
     circulationPaths: doc.circulationPaths.map((c) => ({ ...c, centerline: c.centerline.map(shift) })),
     lockPolygons: doc.lockPolygons.map((l) => ({ ...l, points: l.points.map(shift) })),
     intentPins: doc.intentPins.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })),
+    departments: doc.departments.map((d) => ({ ...d, x: d.x + dx, y: d.y + dy })),
+    rooms: doc.rooms.map((r) => ({ ...r, polygon: r.polygon.map(shift) })),
+    lotGridSeams: doc.lotGridSeams.map((s) => s.map(shift)),
     textLabels: doc.textLabels.map((t) => ({ ...t, x: t.x + dx, y: t.y + dy })),
     scribbles: doc.scribbles.map((sc) => ({ ...sc, points: sc.points.map(shift) })),
   }
@@ -1210,6 +1870,9 @@ function captureCanvasDoc(state: DrawingState): CanvasDoc {
     graph: state.graph,
     lockPolygons: state.lockPolygons,
     intentPins: state.intentPins,
+    departments: state.departments,
+    rooms: state.rooms,
+    lotGridSeams: state.lotGridSeams,
     textLabels: state.textLabels,
     scribbles: state.scribbles,
     boundary: state.boundary,
@@ -1225,6 +1888,7 @@ function captureCanvasDoc(state: DrawingState): CanvasDoc {
     gridSpacing: state.gridSpacing,
     boundaryInfillOpacity: state.boundaryInfillOpacity,
     circulationWidth: state.circulationWidth,
+    circulationMinorWidth: state.circulationMinorWidth,
     metersPerWorldUnit: state.metersPerWorldUnit,
     mapActive: state.mapActive,
     mapDim: state.mapDim,
@@ -1239,11 +1903,14 @@ function applyCanvasDoc(doc: CanvasDoc): Partial<DrawingState> {
     spatialIndex: buildSnapIndex(doc.graph, snapExtras(doc)),
     lockPolygons: doc.lockPolygons,
     intentPins: doc.intentPins,
+    departments: doc.departments,
+    rooms: doc.rooms,
+    lotGridSeams: doc.lotGridSeams,
     textLabels: doc.textLabels,
     scribbles: doc.scribbles,
     boundary: doc.boundary,
     circulationPaths: doc.circulationPaths,
-    circulationMask: doc.circulationPaths.length ? buildCirculationMask(doc.circulationPaths) : null,
+    ...circMasks(doc.circulationPaths),
     underlay: doc.underlay,
     pageWidth: doc.pageWidth,
     pageHeight: doc.pageHeight,
@@ -1256,6 +1923,7 @@ function applyCanvasDoc(doc: CanvasDoc): Partial<DrawingState> {
     gridSpacing: doc.gridSpacing,
     boundaryInfillOpacity: doc.boundaryInfillOpacity,
     circulationWidth: doc.circulationWidth,
+    circulationMinorWidth: doc.circulationMinorWidth,
     metersPerWorldUnit: doc.metersPerWorldUnit,
     mapActive: doc.mapActive,
     mapDim: doc.mapDim,
@@ -1263,6 +1931,7 @@ function applyCanvasDoc(doc: CanvasDoc): Partial<DrawingState> {
     // Transient interaction state never carries across a canvas switch.
     selectedStrokeIds: [],
     pendingPin: null,
+    pendingDept: null,
     pendingText: null,
     liveScribble: null,
     activeSnapGuide: null,

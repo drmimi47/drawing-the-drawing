@@ -99,7 +99,8 @@ export function getRegionConcentration(
   samples = 3,
 ): IntentConcentration {
   const n = Math.max(1, samples)
-  const fields = { DENSITY: 0, PEDESTRIAN: 0, SQF: 0, LANDUSE: 0 } as Record<IntentType, number>
+  const fields = {} as Record<IntentType, number>
+  for (const type of INTENT_TYPES) fields[type] = 0
 
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {

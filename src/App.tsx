@@ -14,10 +14,12 @@ import { Crosshair } from './components/Crosshair/Crosshair'
 const MapView = lazy(() => import('./components/Map/MapView').then((m) => ({ default: m.MapView })))
 import { NormalizeMenu } from './components/Toolbar/NormalizeMenu'
 import { IntentPinMenu } from './components/Toolbar/IntentPinMenu'
+import { DepartmentMenu } from './components/Toolbar/DepartmentMenu'
 import { TextEditor } from './components/Toolbar/TextEditor'
 import { TextHoverPreview } from './components/Toolbar/TextHoverPreview'
 import { SnapToast } from './components/Toolbar/SnapToast'
 import { RightPanel } from './components/Panel/RightPanel'
+import { ProgramSheet } from './components/ProgramSheet/ProgramSheet'
 import { useDrawingStore } from './store/drawingStore'
 
 export default function App() {
@@ -96,6 +98,9 @@ export default function App() {
           {/* Photoshop-style contextual options bar (Scribble / Text tools). */}
           <ContextualBar />
         </main>
+        {/* Integrated space-programming grid: a split column here (canvas left, sheet right),
+            or a full-screen overlay (renders itself fixed). Closed → renders nothing. */}
+        <ProgramSheet />
         <RightPanel />
       </div>
 
@@ -105,6 +110,7 @@ export default function App() {
       {/* Fixed-position menus (anchored to click coordinates). */}
       <NormalizeMenu />
       <IntentPinMenu />
+      <DepartmentMenu />
       <TextEditor />
     </div>
   )

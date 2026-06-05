@@ -5,7 +5,7 @@ import type { CirculationPath } from '../../types/geometry'
 import { buildStrokeGeometry } from './strokeGeometry'
 
 /**
- * Circulation corridors (Gradia Draw restructure — Stage 2).
+ * Circulation corridors (Gradia restructure — Stage 2).
  *
  * In the Circulation layer (and forward) the corridor bands render as a SINGLE
  * flat-shaded region: every band's geometry is marked into the stencil buffer
@@ -19,9 +19,9 @@ import { buildStrokeGeometry } from './strokeGeometry'
  * — only the lot-boundary outline shows there.
  */
 
-const FILL_COLOR = '#64748b' // corridor fill (slate)
+const FILL_COLOR = '#9aa3af' // corridor fill (solid grey)
 const REFERENCE_COLOR = '#e000c0' // magenta centerline back-reference (Lot Boundary)
-const BAND_OPACITY = 0.3
+const BAND_OPACITY = 1 // solid (opaque) — corridors read as flat grey paths, no transparency
 const Z = 8 // on top of strokes, grid, map, and the boundary frame
 
 /** One band's geometry, writing only to the stencil buffer (coverage mask). */
@@ -102,7 +102,7 @@ export function CorridorUnion({ paths }: { paths: CirculationPath[] }) {
       {masks}
       <mesh
         raycast={() => null}
-        renderOrder={25}
+        renderOrder={30}
         frustumCulled={false}
         position={[box.cx, box.cy, Z]}
       >

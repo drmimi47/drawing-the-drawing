@@ -13,7 +13,9 @@
   --panel-border: #d4d9e0; /* thin subtle separators */
   --text: #1a1d22; /* high-contrast dark */
   --text-dim: #6b7380;
-  --accent: #2f6fed;
+  /* Monochrome UI accent (dark neutral) so department/intent gradients pop.
+     Magenta references + pen colors are intentionally NOT driven by this. */
+  --accent: #1f2937;
   --hover: rgba(0, 0, 0, 0.055);
   --panel-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 
@@ -99,7 +101,7 @@ body {
   user-select: none;
 }
 
-/* "GradiaDraw" brand: a plain bold sans wordmark, no mark. */
+/* "Gradia" brand: a plain bold sans wordmark, no mark. */
 .menu-bar-brand {
   font-size: 16px;
   font-weight: 700;
@@ -433,10 +435,10 @@ body {
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid #2f6fed;
+  border: 1px solid var(--accent);
   border-radius: 50%;
   background: #ffffff;
-  color: #2f6fed;
+  color: var(--accent);
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(20, 30, 60, 0.16);
 
@@ -468,10 +470,10 @@ body {
 
 .canvas-branch-btn.is-visible:hover {
   opacity: 1;
-  background: #2f6fed;
+  background: var(--accent);
   color: #ffffff;
   transform: translate(-50%, -50%) scale(1.1);
-  box-shadow: 0 3px 12px rgba(47, 111, 237, 0.32);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.28);
 }
 
 /* Chooser popover shown after clicking a "+": Duplicate vs Blank board. */
@@ -505,13 +507,13 @@ body {
 }
 
 .canvas-branch-menu-item:hover {
-  background: rgba(47, 111, 237, 0.1);
-  color: #2f6fed;
+  background: rgba(0, 0, 0, 0.07);
+  color: var(--accent);
 }
 
 .canvas-branch-menu-item svg {
   flex: 0 0 auto;
-  color: #2f6fed;
+  color: var(--accent);
 }
 
 .canvas-branch-menu-item span {
@@ -529,7 +531,7 @@ body {
 }
 
 .canvas-branch-menu-item:hover small {
-  color: rgba(47, 111, 237, 0.8);
+  color: rgba(0, 0, 0, 0.6);
 }
 
 /* Ghost "add text" trailing the cursor before a click (Text tool hover preview).
@@ -569,6 +571,17 @@ body {
   text-shadow: none;
 }
 
+/* Department zone name (centered on the field center). */
+.dept-label {
+  transform: translateY(-22px);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  user-select: none;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.85);
+}
+
 /* Per-cell intent concentration readout (hover grid over the Intent Pin tool).
    Compact, color-coded percentage rows on a translucent backing for legibility
    over the metaball gradient. */
@@ -577,8 +590,9 @@ body {
   flex-direction: column;
   gap: 1px;
   padding: 2px 5px;
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid var(--panel-border);
+  /* Mostly transparent so the cells/field behind the numbers stay visible. */
+  background: rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(0, 0, 0, 0.07);
   border-radius: 2px;
   font-size: 9px;
   font-weight: 700;
@@ -587,11 +601,12 @@ body {
   white-space: nowrap;
   user-select: none;
   pointer-events: none;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
 }
 
 .intent-cell-row {
   letter-spacing: 0.02em;
+  /* Faint white halo keeps the colored numbers legible over the transparent box. */
+  text-shadow: 0 0 2px rgba(255, 255, 255, 0.9), 0 0 2px rgba(255, 255, 255, 0.9);
 }
 
 /* Hint shown while sizing an intent pin's radius. */

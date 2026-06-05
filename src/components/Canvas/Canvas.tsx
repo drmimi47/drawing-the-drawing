@@ -11,7 +11,7 @@ import { UnderlayView } from './UnderlayView'
 import { InactiveCanvases } from './InactiveCanvases'
 
 /**
- * Root R3F scene for Gradia Draw.
+ * Root R3F scene for Gradia.
  *
  * Orthographic camera for a flat 2D workspace (1 world unit = 1 px at zoom 1),
  * a dark workspace backdrop with a centered white page sheet, pan/zoom

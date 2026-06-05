@@ -1,0 +1,110 @@
+================================================================================
+GRADIA DRAW — INTEGRATED SPACE PROGRAMMING GRID SPECIFICATION
+File Name: document_int.txt
+Target Audience: Core Systems Architects / Frontend Engineers / LLM Coding Agents
+Status: Approved Architectural Directive — Bi-Directional State Integration
+================================================================================
+
+0. SYSTEM PHILOSOPHY & GRID OBJECTIVES
+--------------------------------------------------------------------------------
+Architecture and urban planning rely on "Space Programming"—the conversion of 
+tabular text metrics (room lists, target square footages, capacities) into spatial 
+vectors. This module embeds a live, Excel-like interactive data grid directly 
+into Gradia to handle space programming natively.
+
+The integration is strictly BI-DIRECTIONAL:
+  - DOWNSTREAM: Modifying canvas vectors instantly updates spreadsheet metrics.
+  - UPSTREAM: Modifying spreadsheet numbers instantly forces the canvas geometry
+    to morph, re-slice, or recalculate via the Stage 4 Parametric Engine.
+
+1. UI/UX PLACEMENT & MODAL VIEWSTATE
+--------------------------------------------------------------------------------
+  1.1 Global Anchor: A persistent interactive button labeled "Program Sheet" (or 
+      with a spreadsheet icon) is positioned in the top application header ribbon, 
+      immediately adjacent to the existing "File" and "Document" menus.
+
+  1.2 View Options (Agent-Determined Execution): The grid must support two modes 
+      depending on window sizing or explicit layout focus:
+      - Split-Screen Mode: Side-by-side view (Canvas left, Sheet right) to allow 
+        the designer to watch geometry warp in real-time as values are typed.
+      - Full-Screen Overlay: A high-density spreadsheet modal for initial, 
+        macro data-entry phases (e.g., raw project briefing setup).
+
+  1.3 Local Portability: The panel header must include quick action buttons for: (defer this 1.3 step for now)
+      - [Import Excel]: Parse an external .xlsx file into the Zustand store.
+      - [Export Excel]: Download a fully formatted, formula-linked workbook.
+
+2. DATA ARCHITECTURE & ZUSTAND SYNCHRONICITY
+--------------------------------------------------------------------------------
+The spreadsheet does not maintain independent, disconnected state. It is an alternative 
+visual representation of `drawingStore.ts`. 
+
+  2.1 Downstream Binding (Canvas → Sheet):
+      - Any mutation on the canvas (e.g., drawing a line, shifting a department 
+        pin, altering a lot boundary) triggers your local geometry hooks.
+      - Turf.js calculates real-world area mutations (`areaSqf`), which are pushed 
+        directly to the store.
+      - The data grid rerenders the affected cells dynamically using lightweight 
+        reactive bindings to prevent canvas interaction stutter.
+
+  2.2 Upstream Binding (Sheet → Canvas):
+      - When a cell editing event commits (e.g., `onCellEditCommit`), the grid 
+        intercepts the input, validates it as a clean numerical/text value, and 
+        dispatches a structured update to `drawingStore.ts`.
+      - If a Department target SQF changes, the Stage 3 field weights update.
+      - If a Department Room Count (N) changes, Stage 4.2 Pass 2 is triggered 
+        instantly to re-slice that department's specific polygon boundary.
+      - If a Room's "Is Locked" checkbox is toggled in the sheet, its `isLocked` 
+        metadata attribute flips in the store, immediately shielding it from 
+        the next upstream circulation cascade.
+
+3. GRID DATA MATRIX & TAB BLUEPRINT
+--------------------------------------------------------------------------------
+The internal component grid must organize project data into three hierarchical tabs:
+
+  TAB 1: PROJECT DASHBOARD (READ-ONLY CALCULATION ZONE)
+  - This tab aggregates macro-level efficiency. It uses computed metrics from 
+    the active Zustand store.
+  - Key Columns: Metric Name | Target Value | Actual Value | Variance | Efficiency %
+  - Tracked Rows:
+    * Gross Site Area (Total Lot Boundary size)
+    * Gross Circulation Area (Sum of Main + Minor corridor polygon zones)
+    * Net Assignable Area (Sum of all active room blocks)
+    * Net-to-Gross Ratio (Formula: Net Assignable / Gross Site Area)
+
+  TAB 2: DEPARTMENT SCHEDULE (EDITABLE TARGETS)
+  - Maps one-to-one with elements inside `store.departments`.
+has the same department options for user to put in sqf goals which will then be stored 
+so that if user puts in information in this integrated spreadsheet and then chooses the department pin
+the diameter of that pin will be restricted to a certain size by default with a small constraint warning that it is being referenced
+from the sheet. if not sheet numbers are provided first then user can freely adjust and change the pin deparmtent sizes
+to then create the sheet after. 
+
+  TAB 3: GRANULAR ROOM SCHEDULE (EDITABLE SUBDIVISIONS)
+  - Maps one-to-one with active child items inside `store.rooms`.
+  - Editable Fields: Room ID/Name, Is Locked (boolean checkbox).
+  - Derived Fields: Parent Department, Actual SQF, Percentage of Dept Total.
+  - Action Items: A row action to manually "Split Room" or "Merge Selection" 
+    which invokes the Stage 4.4 geometric slicing mechanisms programmatically.
+
+4. DESIGN AGENT REASONING & IMPLEMENTATION GUIDELINES
+--------------------------------------------------------------------------------
+The coding agent has complete access to the codebase and should apply the following 
+design constraints when executing this plan:
+
+  4.1 Performance Optimization: To avoid UI lockups when thousands of square feet 
+      are being processed, cell updates on numeric inputs should either be debounced 
+      (e.g., wait 300ms after typing stops before running the full Stage 4 slicing 
+      cascade) or bound to an `onBlur` / `Enter Key` event listener.
+
+  4.2 UI Library Selection: The agent can choose the best rendering tool for the job. 
+      A highly optimized custom table build using modern component paradigms (like 
+      shadcn/ui table components with controlled input cells) is perfectly acceptable, 
+      as are high-performance data-grid libraries (like `ag-grid-react` or 
+      `react-data-grid`) if they mesh cleanly with the tailwind theme.
+
+  4.3 Input Validation: If a user enters an invalid character or types a room count 
+      of `0` or negative values, the sheet must gracefully reject the entry, fallback 
+      to the previous valid integer state, and flag an alert on the app's advisory HUD 
+      rather than allowing the geometric slicing engine to pass 0-area errors.
+================================================================================

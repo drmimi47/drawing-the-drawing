@@ -12,7 +12,7 @@ import type { SnapPoint } from '../../geometry/spatialIndex'
  */
 
 const HALF_PX = 6 // half-extent of the glyph, in screen pixels
-const COLOR = '#2f6fed'
+const COLOR = '#1f2937'
 const GLYPH_Z = 5
 
 // Unit (half-extent = 1) outlines as lineLoop vertices (auto-closed).

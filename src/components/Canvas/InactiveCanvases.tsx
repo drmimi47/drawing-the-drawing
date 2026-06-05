@@ -5,7 +5,7 @@ import type { Boundary } from '../../types/geometry'
 import { StrokeView } from './StrokeView'
 import { LockFieldView } from './LockFieldView'
 import { MetaballOverlay } from './MetaballOverlay'
-import { PinMarkers } from './IntentFieldView'
+import { PinMarkers, PIN_REFERENCE_COLOR } from './IntentFieldView'
 import { GridLattice } from './GridView'
 import { UnderlayView } from './UnderlayView'
 import { CorridorUnion } from './CirculationView'
@@ -134,8 +134,22 @@ function GhostCanvas({ entry, doc }: { entry: CanvasEntry; doc: CanvasDoc }) {
 
       {/* Content — absolute world coords, so no offset group. */}
       <LockFieldView locks={doc.lockPolygons} />
-      {doc.intentPins.length > 0 && <MetaballOverlay pins={doc.intentPins} />}
-      {doc.intentPins.length > 0 && <PinMarkers pins={doc.intentPins} pending={null} />}
+      {/* Matches the active board: the gradient (clipped to this board's page rect)
+          shows only on the Intent layer; markers show on Intent (per-type) and Rooms
+          (magenta), and are hidden on every other layer. */}
+      {doc.intentPins.length > 0 && doc.activeLayer === 'INTENT' && (
+        <MetaballOverlay
+          pins={doc.intentPins}
+          clip={{ minX: origin.x - hw, minY: origin.y - hh, maxX: origin.x + hw, maxY: origin.y + hh }}
+        />
+      )}
+      {doc.intentPins.length > 0 && (doc.activeLayer === 'INTENT' || doc.activeLayer === 'ROOMS') && (
+        <PinMarkers
+          pins={doc.intentPins}
+          pending={null}
+          colorOverride={doc.activeLayer === 'INTENT' ? undefined : PIN_REFERENCE_COLOR}
+        />
+      )}
       {doc.boundary && <GhostBoundary boundary={doc.boundary} infillOpacity={doc.boundaryInfillOpacity} />}
       {doc.circulationPaths.length > 0 && <CorridorUnion paths={doc.circulationPaths} />}
       {doc.graph.strokes.map((stroke) => (

@@ -1,5 +1,5 @@
 /**
- * Circulation corridor geometry (Gradia Draw restructure — Stage 2).
+ * Circulation corridor geometry (Gradia restructure — Stage 2).
  *
  * Offsets a hallway centerline into a closed corridor BAND polygon (ring). The
  * collection of bands is the circulation keep-out mask consumed by the Stage-3

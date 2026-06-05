@@ -1,4 +1,4 @@
-import type { Boundary, CirculationPath, Graph } from '../types/geometry'
+import type { Boundary, CirculationPath, Department, Graph, IntentPin, Room } from '../types/geometry'
 import type { PipelineLayer } from '../store/drawingStore'
 
 /**
@@ -7,6 +7,8 @@ import type { PipelineLayer } from '../store/drawingStore'
  * layer is about (and, since these read the live store, to the active board):
  *   • BOUNDARY     → the lot-boundary ring vertices + its edges.
  *   • CIRCULATION  → every circulation centerline's vertices + edges.
+ *   • DEPARTMENTS  → the department-zone centers (no edges).
+ *   • INTENT       → the intent-pin centers (no edges).
  *   • otherwise    → the planar-graph vertices (edges are the visible strokes).
  *
  * Each draggable point carries an opaque `key` that both the renderer (to draw the
@@ -14,6 +16,9 @@ import type { PipelineLayer } from '../store/drawingStore'
  *   graph vertex id   → "<vertexId>"        (no colons)
  *   boundary vertex   → "bnd:<index>"
  *   circulation vertex→ "circ:<pathId>:<index>"   (pathId has no colon)
+ *   department zone   → "dept:<deptId>"           (deptId has no colon)
+ *   intent pin        → "pin:<pinId>"             (pinId has no colon)
+ *   room vertex       → "room:<roomId>:<index>"   (roomId has no colon)
  */
 
 export interface EditTarget {
@@ -30,7 +35,34 @@ export function getEditTargets(
   graph: Graph,
   boundary: Boundary | null,
   circulationPaths: CirculationPath[],
+  intentPins: IntentPin[] = [],
+  departments: Department[] = [],
+  rooms: Room[] = [],
 ): { points: EditTarget[]; edges: EditEdge[] } {
+  if (layer === 'ROOMS') {
+    const points: EditTarget[] = []
+    const edges: EditEdge[] = []
+    for (const r of rooms) {
+      const ring = r.polygon
+      if (ring.length < 3) continue
+      ring.forEach((p, i) => points.push({ key: `room:${r.roomId}:${i}`, x: p.x, y: p.y }))
+      for (let i = 0; i < ring.length; i++) {
+        const a = ring[i]
+        const b = ring[(i + 1) % ring.length]
+        edges.push([a.x, a.y, b.x, b.y])
+      }
+    }
+    return { points, edges }
+  }
+
+  if (layer === 'DEPARTMENTS') {
+    return { points: departments.map((d) => ({ key: `dept:${d.id}`, x: d.x, y: d.y })), edges: [] }
+  }
+
+  if (layer === 'INTENT') {
+    return { points: intentPins.map((p) => ({ key: `pin:${p.id}`, x: p.x, y: p.y })), edges: [] }
+  }
+
   if (layer === 'BOUNDARY') {
     if (!boundary || boundary.ring.length === 0) return { points: [], edges: [] }
     const ring = boundary.ring

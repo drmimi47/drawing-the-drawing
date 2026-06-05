@@ -122,18 +122,17 @@ export interface LockPolygon {
   featherRadius: number
 }
 
-/** Programmatic intent categories an Intent Pin can carry (Cluster H). */
-export type IntentType = 'DENSITY' | 'PEDESTRIAN' | 'SQF' | 'LANDUSE'
+/** Programmatic intent categories an Intent Pin can carry (Rooms-layer metaball fields).
+ *  Two for now: DENSITY (tighter/cellular) and OPENNESS (looser/open-plan). */
+export type IntentType = 'DENSITY' | 'OPENNESS'
 
 /** Canonical ordering of all intent types (for field/mix iteration). */
-export const INTENT_TYPES: IntentType[] = ['DENSITY', 'PEDESTRIAN', 'SQF', 'LANDUSE']
+export const INTENT_TYPES: IntentType[] = ['DENSITY', 'OPENNESS']
 
 /** Display label + field color per intent type. */
 export const INTENT_META: Record<IntentType, { label: string; color: string }> = {
-  DENSITY: { label: 'Density', color: '#8b5cf6' },
-  PEDESTRIAN: { label: 'Pedestrian flow', color: '#1f9d55' },
-  SQF: { label: 'SQF priority', color: '#e8852b' },
-  LANDUSE: { label: 'Land use', color: '#2f6fed' },
+  DENSITY: { label: 'Density', color: '#8b5cf6' }, // purple
+  OPENNESS: { label: 'Openness', color: '#14b8a6' }, // teal
 }
 
 /**
@@ -148,10 +147,120 @@ export interface IntentPin {
   intentType: IntentType
 }
 
+/** Common building programs a department zone can be (office-leaning). Picked from a
+ *  popup when placing a department, like intent pins pick an intent type. MECHANICAL and
+ *  CORE are the building's services/shafts — they ALWAYS render black / grey. */
+export type DepartmentType =
+  | 'OPEN_OFFICE'
+  | 'PRIVATE_OFFICE'
+  | 'CONFERENCE'
+  | 'RECEPTION'
+  | 'BREAK'
+  | 'COLLABORATION'
+  | 'RESTROOM'
+  | 'STORAGE'
+  | 'CORE'
+  | 'MECHANICAL'
+
+/** Canonical ordering (drives the placement popup). */
+export const DEPARTMENT_TYPES: DepartmentType[] = [
+  'OPEN_OFFICE',
+  'PRIVATE_OFFICE',
+  'CONFERENCE',
+  'RECEPTION',
+  'BREAK',
+  'COLLABORATION',
+  'RESTROOM',
+  'STORAGE',
+  'CORE',
+  'MECHANICAL',
+]
+
+/** Display label + field color + default grain per department type.
+ *  grain ∈ [0,1]: 0 = most open (few large rooms / open-plan), 1 = most cellular (many
+ *  small rooms). The placement seeds a department's grain from its type; the user then
+ *  nudges it (Stage 4). CORE / MECHANICAL are monolithic services → grain 0. */
+export const DEPARTMENT_META: Record<DepartmentType, { label: string; color: string; defaultGrain: number }> = {
+  OPEN_OFFICE: { label: 'Open Office', color: '#2f6fed', defaultGrain: 0.15 },
+  PRIVATE_OFFICE: { label: 'Private Offices', color: '#8b5cf6', defaultGrain: 0.85 },
+  CONFERENCE: { label: 'Conference / Meeting', color: '#e8852b', defaultGrain: 0.35 },
+  RECEPTION: { label: 'Reception / Lobby', color: '#e0457b', defaultGrain: 0.2 },
+  BREAK: { label: 'Break Room / Pantry', color: '#1f9d55', defaultGrain: 0.25 },
+  COLLABORATION: { label: 'Collaboration / Lounge', color: '#14b8a6', defaultGrain: 0.2 },
+  RESTROOM: { label: 'Restrooms', color: '#0ea5e9', defaultGrain: 0.7 },
+  STORAGE: { label: 'Storage / IT', color: '#b45309', defaultGrain: 0.6 },
+  CORE: { label: 'Core', color: '#9ca3af', defaultGrain: 0 }, // always grey, monolithic
+  MECHANICAL: { label: 'Mechanical', color: '#111111', defaultGrain: 0 }, // always black, monolithic
+}
+
+/** Neutral fallback grain for departments with no type (placed before types existed). */
+export const DEFAULT_GRAIN = 0.4
+
+/** Department types whose field color is fixed (the panel can't recolor them). */
+export const FIXED_COLOR_DEPT_TYPES = new Set<DepartmentType>(['CORE', 'MECHANICAL'])
+
+/**
+ * A department zone (restructure_v1 Stage 3). Like an intent pin it's a soft
+ * BLENDING field (center + radius, Wyvill falloff), but it carries program metadata
+ * (type, name, target area) and its own color, and its field is HARD-MASKED to the lot
+ * boundary minus the circulation network — so the gradient morphs to stay inside the
+ * lot and never crosses a corridor. Department fields still blend/overlap each other
+ * freely (no inter-department exclusion — restructure_v1 CONFLICTS #11).
+ */
+export interface Department {
+  id: string
+  name: string
+  x: number
+  y: number
+  radius: number
+  color: string
+  /** Program type chosen at placement (drives default name + color); optional for
+   *  departments created before types existed. */
+  deptType?: DepartmentType
+  /** Optional target floor area (ft², or world units² with no map scale). */
+  targetSqf?: number
+  /** Parametric room count N for this department (Stage 4); undefined ⇒ no rooms yet.
+   *  Acts as a manual override; when `grain` is set the count is derived from grain. */
+  roomCount?: number
+  /** Subdivision grain ∈ [0,1] (Stage 4): 0 = open-plan (few large rooms), 1 = cellular
+   *  (many small rooms). The primary room control — the engine derives the effective room
+   *  count from the department's footprint area and this grain. */
+  grain?: number
+}
+
+/**
+ * A room (restructure_v2 Stage 4): a gap-free sub-polygon of its parent department,
+ * produced by the parametric slicing engine (equal-area strips, minor corridors carved
+ * out). `isLocked` rooms are immune to parametric regeneration (4.5.2).
+ */
+export interface Room {
+  roomId: string
+  parentDeptId: string
+  /** Closed polygon ring in world coordinates (first point not repeated). */
+  polygon: { x: number; y: number }[]
+  /** Floor area (ft², or world units² with no map scale). */
+  areaSqf: number
+  isLocked: boolean
+  /** Optional user-given name (Program Sheet); transient — cleared on regeneration. */
+  name?: string
+}
+
+/** Rotating palette for new department zones (distinct, legible hues). */
+export const DEPARTMENT_PALETTE: string[] = [
+  '#2f6fed', // blue
+  '#e8852b', // orange
+  '#1f9d55', // green
+  '#8b5cf6', // violet
+  '#e0457b', // pink
+  '#0ea5e9', // sky
+  '#b45309', // amber-brown
+  '#14b8a6', // teal
+]
+
 export const emptyGraph = (): Graph => ({ vertices: {}, strokes: [] })
 
 /**
- * Lot boundary (Gradia Draw restructure — Stage 1). A first-class, closed ring that is
+ * Lot boundary (Gradia restructure — Stage 1). A first-class, closed ring that is
  * the master working area ("a canvas within the canvas"). `targetSqf` drives the
  * advisory delta readout (never an auto-transform — Stage 1.3).
  */
@@ -168,16 +277,24 @@ export interface Boundary {
 }
 
 /**
- * A circulation (hallway) centerline (Gradia Draw restructure — Stage 2). The open
+ * A circulation (hallway) centerline (Gradia restructure — Stage 2). The open
  * polyline is offset to `width` (world units) into a corridor band; the union of
  * all bands forms the keep-out mask that repels department fields downstream.
  */
+/** Circulation hierarchy (restructure_v2 Stage 2): primary structural spine vs. smaller
+ *  localized connectors. MAIN paths are hard barriers to department fields; MINOR paths
+ *  are permeable (fields bleed across them). */
+export type CirculationTier = 'MAIN' | 'MINOR'
+
 export interface CirculationPath {
   id: string
   /** Open polyline centerline in world coordinates. */
   centerline: { x: number; y: number }[]
   /** Full corridor width in world units. */
   width: number
+  /** Pathway hierarchy. Absent ⇒ treated as MAIN (back-compat with paths drawn
+   *  before the main/secondary distinction existed). */
+  tier?: CirculationTier
 }
 
 /**

@@ -46,6 +46,12 @@
   box-shadow: var(--panel-shadow);
 }
 
+/* Prototype / testing environment: hide the bottom-left Mapbox wordmark logo.
+   NOTE: Mapbox's terms require the logo + attribution in PRODUCTION — re-enable before shipping. */
+.mapboxgl-ctrl-logo {
+  display: none !important;
+}
+
 /* Floating measurement HUD, inside the canvas container. */
 .map-hud {
   position: absolute;

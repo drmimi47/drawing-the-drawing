@@ -17,7 +17,7 @@ export function PageSheet() {
   // When more than one design-option canvas exists, accent the ACTIVE sheet's border
   // so the editable canvas reads as distinct from its read-only neighbors.
   const multiCanvas = useDrawingStore((s) => s.canvases.length > 1)
-  const borderColor = multiCanvas ? '#2f6fed' : '#c0c6cf'
+  const borderColor = multiCanvas ? '#1f2937' : '#c0c6cf'
   // In MAP context the dimmed Mapbox underlay fills the artboard, so we skip the
   // opaque white fill (the transparent canvas lets the map show through). The page
   // border still draws as a frame.

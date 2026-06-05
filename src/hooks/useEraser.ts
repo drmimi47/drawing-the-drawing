@@ -20,6 +20,9 @@ export function useEraser() {
   const eraseSegmentAt = useDrawingStore((s) => s.eraseSegmentAt)
   const eraseTextLabel = useDrawingStore((s) => s.eraseTextLabel)
   const eraseScribble = useDrawingStore((s) => s.eraseScribble)
+  const eraseIntentPinAt = useDrawingStore((s) => s.eraseIntentPinAt)
+  const eraseDepartmentAt = useDrawingStore((s) => s.eraseDepartmentAt)
+  const eraseRoomWallAt = useDrawingStore((s) => s.eraseRoomWallAt)
 
   const erasingRef = useRef(false)
   const historyPushedRef = useRef(false)
@@ -29,6 +32,28 @@ export function useEraser() {
     (x: number, y: number) => {
       const zoom = (camera as OrthographicCamera).zoom || 1
       const radius = ERASE_RADIUS_PX / zoom
+
+      // Intent pins: on the Intent layer, contact over a pin center deletes it (its
+      // own undo step). The store no-ops off the Intent layer, so this is safe to try
+      // first regardless of layer.
+      if (eraseIntentPinAt(x, y, radius)) {
+        lastRef.current = { x, y }
+        return
+      }
+
+      // Department pins: on the Departments layer, contact over a pin center deletes the
+      // zone (its own undo step; rooms regenerate). No-ops off the Departments layer.
+      if (eraseDepartmentAt(x, y, radius)) {
+        lastRef.current = { x, y }
+        return
+      }
+
+      // Room walls: on the Rooms layer, contact over a wall between two same-department rooms
+      // merges them (count drops; the survivor fills the space). No-ops off the Rooms layer.
+      if (eraseRoomWallAt(x, y, radius)) {
+        lastRef.current = { x, y }
+        return
+      }
 
       // Polyline segment eraser: a click/swipe over a polyline (graph straight
       // stroke) or circulation centerline deletes just that segment, plus any lone
@@ -107,7 +132,7 @@ export function useEraser() {
       }
       eraseCapsule(last.x, last.y, x, y, radius)
     },
-    [camera, beginHistory, eraseCapsule, eraseSegmentAt, eraseTextLabel, eraseScribble],
+    [camera, beginHistory, eraseCapsule, eraseSegmentAt, eraseTextLabel, eraseScribble, eraseIntentPinAt, eraseDepartmentAt, eraseRoomWallAt],
   )
 
   useEffect(() => {

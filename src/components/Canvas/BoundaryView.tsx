@@ -1,9 +1,10 @@
 import { useMemo } from 'react'
 import * as THREE from 'three'
+import { Line } from '@react-three/drei'
 import { useDrawingStore } from '../../store/drawingStore'
 
 /**
- * Lot boundary (Gradia Draw restructure — Stage 1). Renders store.boundary as a closed
+ * Lot boundary (Gradia restructure — Stage 1). Renders store.boundary as a closed
  * loop in world space — the master working frame ("a canvas within the canvas") —
  * plus a translucent interior fill whose opacity is user-controlled (INFILL
  * OPACITY slider).
@@ -16,6 +17,7 @@ import { useDrawingStore } from '../../store/drawingStore'
 const BOUNDARY_COLOR = '#111111' // boundary border (black)
 const BOUNDARY_OPEN_COLOR = '#dc2626' // incomplete (open) boundary (red warning)
 const BOUNDARY_FILL_COLOR = '#ffffff' // white interior infill
+const BOUNDARY_WIDTH = 2 // px — matches the magenta context reference outline's stroke width
 const Z = 5 // above strokes (1), below CAD snap overlays (6)
 
 export function BoundaryView() {
@@ -25,25 +27,13 @@ export function BoundaryView() {
 
   const isClosed = boundary?.isClosed !== false
 
-  // Closed loop ⇒ one position per vertex (lineLoop closes it). Open chain ⇒
-  // consecutive segment pairs for <lineSegments> (no closing edge).
-  const linePositions = useMemo(() => {
+  // Thick line points (drei <Line> draws a screen-space-width polyline). Closed ⇒ repeat the
+  // first vertex to close the loop; open chain ⇒ the path as-is (no closing edge).
+  const linePoints = useMemo<[number, number, number][] | null>(() => {
     if (!boundary || boundary.ring.length < 2) return null
-    const ring = boundary.ring
-    if (isClosed) {
-      const arr = new Float32Array(ring.length * 3)
-      ring.forEach((p, i) => {
-        arr[i * 3] = p.x
-        arr[i * 3 + 1] = p.y
-        arr[i * 3 + 2] = Z
-      })
-      return arr
-    }
-    const arr = new Float32Array((ring.length - 1) * 6)
-    for (let i = 0; i < ring.length - 1; i++) {
-      arr.set([ring[i].x, ring[i].y, Z, ring[i + 1].x, ring[i + 1].y, Z], i * 6)
-    }
-    return arr
+    const pts = boundary.ring.map((p) => [p.x, p.y, Z] as [number, number, number])
+    if (isClosed) pts.push([boundary.ring[0].x, boundary.ring[0].y, Z])
+    return pts
   }, [boundary, isClosed])
 
   // Triangulated interior (earcut via THREE.Shape) — only for a closed ring.
@@ -52,7 +42,7 @@ export function BoundaryView() {
     return new THREE.Shape(boundary.ring.map((p) => new THREE.Vector2(p.x, p.y)))
   }, [boundary, isClosed])
 
-  if (!linePositions) return null
+  if (!linePoints) return null
 
   // In the Context layer the boundary is shown as a screen-space magenta reference
   // outline (BoundaryContextOverlay) drawn ABOVE the live map, so the R3F view —
@@ -63,7 +53,7 @@ export function BoundaryView() {
 
   return (
     // key so a redraw with a different point count / closed-state remounts cleanly.
-    <group key={`${linePositions.length}-${isClosed}`}>
+    <group key={`${linePoints.length}-${isClosed}`}>
       {shape && infillOpacity > 0 && (
         <mesh position={[0, 0, Z - 0.1]} renderOrder={19} frustumCulled={false}>
           <shapeGeometry args={[shape]} />
@@ -78,23 +68,19 @@ export function BoundaryView() {
         </mesh>
       )}
 
-      {isClosed ? (
-        <lineLoop renderOrder={20} frustumCulled={false}>
-          <bufferGeometry>
-            <bufferAttribute attach="attributes-position" args={[linePositions, 3]} />
-          </bufferGeometry>
-          {/* transparent so it joins the transparent pass and sorts ABOVE the fill
-              (renderOrder 20 > 19) — keeps the border visible at any infill %. */}
-          <lineBasicMaterial color={color} depthTest={false} transparent toneMapped={false} />
-        </lineLoop>
-      ) : (
-        <lineSegments renderOrder={20} frustumCulled={false}>
-          <bufferGeometry>
-            <bufferAttribute attach="attributes-position" args={[linePositions, 3]} />
-          </bufferGeometry>
-          <lineBasicMaterial color={color} depthTest={false} transparent toneMapped={false} />
-        </lineSegments>
-      )}
+      {/* drei <Line> = a screen-space-width polyline (BOUNDARY_WIDTH px), so the black lot edge
+          is as thick as the magenta context reference. renderOrder 28 sorts it ABOVE the fill
+          (19) and the department gradient (26), so the edge stays a crisp outline. */}
+      <Line
+        points={linePoints}
+        color={color}
+        lineWidth={BOUNDARY_WIDTH}
+        transparent
+        depthTest={false}
+        toneMapped={false}
+        renderOrder={28}
+        frustumCulled={false}
+      />
     </group>
   )
 }

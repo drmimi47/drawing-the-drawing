@@ -72,6 +72,39 @@
   letter-spacing: 0.01em;
 }
 
+/* ---- Program Sheet: a subtle outlined pill, distinct from the column tool buttons.
+   It opens a data panel rather than activating a drawing tool, so it reads differently. ---- */
+.rail-sheet-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  margin-left: 4px;
+  padding: 0 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 15px;
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.rail-sheet-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.rail-sheet-btn.is-open {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 /* ---- Dropdown wrapper (button + floating panel as one unit) ---- */
 .rail-dropdown-wrap {
   position: relative;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { GripVertical, ChevronDown, Type } from 'lucide-react'
+import { GripVertical, ChevronDown, Type, Ruler, SlidersHorizontal } from 'lucide-react'
 import { useDrawingStore } from '../../store/drawingStore'
 import { LINEWEIGHTS } from '../../types/geometry'
 import './ContextualBar.css'
@@ -111,9 +111,59 @@ function SizePseudoControl() {
   )
 }
 
+/** Polyline snapping-guides toggle. Off hides the construction guides, but vertex and
+ *  edge object snaps keep working. */
+function SnapGuidesControl() {
+  const on = useDrawingStore((s) => s.snapGuidesEnabled)
+  const setOn = useDrawingStore((s) => s.setSnapGuidesEnabled)
+  return (
+    <button
+      type="button"
+      className={`ctx-btn${on ? ' is-active' : ''}`}
+      title="Snapping guides — vertex & edge snaps stay on when off"
+      aria-pressed={on}
+      onClick={() => setOn(!on)}
+    >
+      <Ruler size={13} strokeWidth={2} />
+      <span>Guides {on ? 'on' : 'off'}</span>
+    </button>
+  )
+}
+
+/** Intent Pin bar: "Adjust" resizes every department's rooms to the placed Density/Openness
+ *  fields. Only clickable once at least one Intent Pin exists on the Rooms layer. */
+function IntentAdjustControl() {
+  const intentPins = useDrawingStore((s) => s.intentPins)
+  const applyIntent = useDrawingStore((s) => s.applyIntentToRooms)
+  const setShowGrid = useDrawingStore((s) => s.setShowIntentGrid)
+  const setShowLabels = useDrawingStore((s) => s.setShowIntentLabels)
+  const canAdjust = intentPins.length > 0
+  // Hovering Adjust previews the intent concentration grid + % and the pin type labels (moved
+  // here from the ribbon Intent Pin button).
+  const preview = (show: boolean) => {
+    setShowGrid(show)
+    setShowLabels(show)
+  }
+  return (
+    <button
+      type="button"
+      className="ctx-btn"
+      disabled={!canAdjust}
+      title={canAdjust ? 'Add rooms where Density wins, remove where Openness wins (locked rooms kept)' : 'Place at least one Intent Pin first'}
+      onClick={() => applyIntent()}
+      onMouseEnter={() => preview(true)}
+      onMouseLeave={() => preview(false)}
+    >
+      <SlidersHorizontal size={13} strokeWidth={2} />
+      <span>Adjust</span>
+    </button>
+  )
+}
+
 export function ContextualBar() {
   const toolMode = useDrawingStore((s) => s.toolMode)
-  const show = toolMode === 'DRAW' || toolMode === 'TEXT'
+  const show =
+    toolMode === 'DRAW' || toolMode === 'TEXT' || toolMode === 'POLYLINE' || toolMode === 'INTENT_PIN'
 
   const barRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ startX: number; startY: number; startLeft: number; startTop: number } | null>(null)
@@ -178,9 +228,11 @@ export function ContextualBar() {
         <GripVertical size={14} strokeWidth={2} />
       </button>
       <span className="ctx-divider" />
-      <ColorControl />
+      {(toolMode === 'DRAW' || toolMode === 'TEXT') && <ColorControl />}
       {toolMode === 'DRAW' && <WeightControl />}
       {toolMode === 'TEXT' && <SizePseudoControl />}
+      {toolMode === 'POLYLINE' && <SnapGuidesControl />}
+      {toolMode === 'INTENT_PIN' && <IntentAdjustControl />}
     </div>
   )
 }

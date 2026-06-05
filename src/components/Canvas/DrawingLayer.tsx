@@ -9,6 +9,7 @@ import { useSelection } from '../../hooks/useSelection'
 import { useVectorEdit } from '../../hooks/useVectorEdit'
 import { useLockTool } from '../../hooks/useLockTool'
 import { useIntentPinTool } from '../../hooks/useIntentPinTool'
+import { useDeptTool } from '../../hooks/useDeptTool'
 import { usePolyline } from '../../hooks/usePolyline'
 import { useTextTool } from '../../hooks/useTextTool'
 import { getEditTargets } from '../../geometry/editTargets'
@@ -16,10 +17,13 @@ import { RibbonMesh, StrokeView, SELECTION_COLOR } from './StrokeView'
 import { MarchingAntsLine } from './MarchingAntsLine'
 import { LockFieldView } from './LockFieldView'
 import { IntentFieldView } from './IntentFieldView'
+import { DepartmentFieldOverlay } from './DepartmentFieldOverlay'
+import { RoomsOverlay } from './RoomsOverlay'
 import { SnapIndicator } from './SnapIndicator'
 import { SnapGuideOverlay } from './SnapGuideOverlay'
 import { TrackingOverlay } from './TrackingOverlay'
 import { BoundaryView } from './BoundaryView'
+import { LotGridView } from './LotGridView'
 import { CirculationView } from './CirculationView'
 
 type PointerHandler = (e: ThreeEvent<PointerEvent>) => void
@@ -38,9 +42,12 @@ function EditHandles() {
   const graph = useDrawingStore((s) => s.graph)
   const boundary = useDrawingStore((s) => s.boundary)
   const circulationPaths = useDrawingStore((s) => s.circulationPaths)
+  const intentPins = useDrawingStore((s) => s.intentPins)
+  const departments = useDrawingStore((s) => s.departments)
+  const rooms = useDrawingStore((s) => s.rooms)
 
   const { positions, edgePositions } = useMemo(() => {
-    const { points, edges } = getEditTargets(activeLayer, graph, boundary, circulationPaths)
+    const { points, edges } = getEditTargets(activeLayer, graph, boundary, circulationPaths, intentPins, departments, rooms)
     const positions = new Float32Array(points.length * 3)
     points.forEach((p, i) => {
       positions[i * 3] = p.x
@@ -50,7 +57,7 @@ function EditHandles() {
     const edgePositions = new Float32Array(edges.length * 6)
     edges.forEach((e, i) => edgePositions.set([e[0], e[1], EDIT_Z, e[2], e[3], EDIT_Z], i * 6))
     return { positions, edgePositions }
-  }, [activeLayer, graph, boundary, circulationPaths])
+  }, [activeLayer, graph, boundary, circulationPaths, intentPins, departments, rooms])
 
   if (positions.length === 0) return null
 
@@ -138,6 +145,7 @@ export function DrawingLayer() {
   const vectorEdit = useVectorEdit()
   const lockTool = useLockTool()
   const intentPinTool = useIntentPinTool()
+  const deptTool = useDeptTool()
   const polyline = usePolyline()
   const textTool = useTextTool()
 
@@ -156,6 +164,7 @@ export function DrawingLayer() {
       toolMode === 'VECTOR' ||
       toolMode === 'LASSO_LOCK' ||
       toolMode === 'INTENT_PIN' ||
+      toolMode === 'DEPT' ||
       toolMode === 'TEXT' ||
       isSelectionTool) &&
     !isSpaceDown
@@ -171,11 +180,13 @@ export function DrawingLayer() {
             ? lockTool
             : toolMode === 'INTENT_PIN'
               ? intentPinTool
-              : toolMode === 'POLYLINE'
-                ? polyline
-                : toolMode === 'TEXT'
-                  ? textTool
-                  : scribble
+              : toolMode === 'DEPT'
+                ? deptTool
+                : toolMode === 'POLYLINE'
+                  ? polyline
+                  : toolMode === 'TEXT'
+                    ? textTool
+                    : scribble
 
   // Clicking inside a NEIGHBOR canvas activates it instead of editing the current
   // one (the interaction plane covers the whole viewport, so neighbor page meshes
@@ -200,7 +211,10 @@ export function DrawingLayer() {
         onPointerUp={handlers.onPointerUp}
       />
       <LockFieldView locks={lockPolygons} />
+      <LotGridView />
       <IntentFieldView pins={intentPins} pending={pendingPin} />
+      <DepartmentFieldOverlay />
+      <RoomsOverlay />
       {/* Committed text renders as a DOM overlay above the map (see <TextOverlay/> in
           App), not inside the R3F scene, so it stays visible over the map substrate. */}
       {/* Circulation corridor bands (Stage 2) + lot boundary frame (Stage 1). */}

@@ -38,14 +38,17 @@ export function useLockTool() {
     const p = { x: e.point.x, y: e.point.y }
     startRef.current = p
     endRef.current = p
-    setOutline({ points: rectCorners(p.x, p.y, p.x, p.y) })
+    // On the Rooms layer the Lock tool locks individual ROOMS (click interior) — no rect outline.
+    if (useDrawingStore.getState().activeLayer !== 'ROOMS') setOutline({ points: rectCorners(p.x, p.y, p.x, p.y) })
   }, [])
 
   const onPointerMove = useCallback((e: ThreeEvent<PointerEvent>) => {
     if (!activeRef.current) return
     const p = { x: e.point.x, y: e.point.y }
     endRef.current = p
-    setOutline({ points: rectCorners(startRef.current.x, startRef.current.y, p.x, p.y) })
+    if (useDrawingStore.getState().activeLayer !== 'ROOMS') {
+      setOutline({ points: rectCorners(startRef.current.x, startRef.current.y, p.x, p.y) })
+    }
   }, [])
 
   const onPointerUp = useCallback(() => {
@@ -56,6 +59,12 @@ export function useLockTool() {
     const store = useDrawingStore.getState()
     const { x: sx, y: sy } = startRef.current
     const { x: ex, y: ey } = endRef.current
+
+    // Rooms layer: click a room's interior to toggle its lock (shields it from Intent "Adjust").
+    if (store.activeLayer === 'ROOMS') {
+      store.toggleRoomLockAt(sx, sy)
+      return
+    }
 
     const moved = Math.hypot(ex - sx, ey - sy) > MIN_DRAG
     if (!moved) {

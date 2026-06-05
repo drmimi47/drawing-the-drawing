@@ -1,5 +1,5 @@
 /**
- * Artboard (page sheet) confinement (Gradia Draw restructure).
+ * Artboard (page sheet) confinement (Gradia restructure).
  *
  * The page sheet is a fixed-size white rectangle (store.pageWidth × store.pageHeight)
  * centered at the ACTIVE board's world origin — the central board is at (0,0), but
