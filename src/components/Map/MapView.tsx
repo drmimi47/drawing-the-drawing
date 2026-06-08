@@ -192,6 +192,25 @@ export function MapView() {
       refreshScale()
     })
 
+    // Surface style/tile load failures instead of silently rendering a blank
+    // globe. The most common production cause is a URL-restricted token that
+    // doesn't whitelist the exact origin being visited (style + tiles 403),
+    // or a private/unpublished custom style the token can't read.
+    map.on('error', (e) => {
+      const err = (e as { error?: { status?: number; message?: string } }).error
+      const status = err?.status
+      if (status === 401 || status === 403) {
+        setError(
+          `Mapbox rejected the request (${status}). The token is URL-restricted and ` +
+            `this origin (${window.location.origin}) is not whitelisted, or the token ` +
+            `can't read the configured style. Add this exact origin to the token's URL ` +
+            `restrictions in Mapbox, or use an unrestricted token to confirm.`,
+        )
+      } else if (err?.message) {
+        setError(`Mapbox error: ${err.message}`)
+      }
+    })
+
     // Keep the map sized to its container if the layout changes.
     const ro = new ResizeObserver(() => map.resize())
     ro.observe(containerRef.current)
