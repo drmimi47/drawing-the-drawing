@@ -15,6 +15,12 @@ import { useDrawingStore } from '../../store/drawingStore'
 import { useCanvasStore } from '../../store/canvasStore'
 import { mercatorMetersPerWorldUnit } from '../../geometry/geoScale'
 import { artboardScreenRect } from '../../utils/viewport'
+import {
+  MAPBOX_DISABLED_MESSAGE,
+  MAPBOX_ENABLED,
+  MAPBOX_STYLE,
+  MAPBOX_TOKEN,
+} from '../../config/mapbox'
 import './MapView.css'
 
 /**
@@ -25,13 +31,9 @@ import './MapView.css'
  * publishes finalized geometry to the store as GeoJSON. Unmounting tears the map
  * down cleanly, returning the user to the standard canvas.
  *
- * The access token comes from the VITE_MAPBOX_TOKEN env var (never hardcoded).
+ * Token and style come from src/config/mapbox (never hardcoded). With no token
+ * configured the component renders an explanatory notice instead of a map.
  */
-
-const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
-/** Map style URL — set VITE_MAPBOX_STYLE to a published Mapbox Studio style; falls
- *  back to the stock streets style. (The custom style's account must own the token.) */
-const STYLE = import.meta.env.VITE_MAPBOX_STYLE || 'mapbox://styles/mapbox/streets-v12'
 
 const SQM_TO_SQFT = 10.7639
 const SQM_TO_ACRE = 1 / 4046.8564224
@@ -121,16 +123,16 @@ export function MapView() {
 
   useEffect(() => {
     if (!active || !containerRef.current) return
-    if (!TOKEN) {
-      setError('Set VITE_MAPBOX_TOKEN in your .env to enable the map.')
+    if (!MAPBOX_ENABLED) {
+      setError(MAPBOX_DISABLED_MESSAGE)
       return
     }
     setError(null)
-    mapboxgl.accessToken = TOKEN
+    mapboxgl.accessToken = MAPBOX_TOKEN
 
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: STYLE,
+      style: MAPBOX_STYLE,
       center: [-122.4194, 37.7749],
       zoom: 16,
       // Required so the canvas can be snapshotted to a PNG when the map freezes.
@@ -193,18 +195,19 @@ export function MapView() {
     })
 
     // Surface style/tile load failures instead of silently rendering a blank
-    // globe. The most common production cause is a URL-restricted token that
-    // doesn't whitelist the exact origin being visited (style + tiles 403),
-    // or a private/unpublished custom style the token can't read.
+    // globe. Common production causes: a token that was revoked after the bundle
+    // shipped (the token is inlined at build time, so an old deploy keeps sending
+    // a dead one), a URL-restricted token that doesn't whitelist the exact origin
+    // being visited, or a private/unpublished style the token can't read.
     map.on('error', (e) => {
       const err = (e as { error?: { status?: number; message?: string } }).error
       const status = err?.status
       if (status === 401 || status === 403) {
         setError(
-          `Mapbox rejected the request (${status}). The token is URL-restricted and ` +
-            `this origin (${window.location.origin}) is not whitelisted, or the token ` +
-            `can't read the configured style. Add this exact origin to the token's URL ` +
-            `restrictions in Mapbox, or use an unrestricted token to confirm.`,
+          `Mapbox rejected the request (${status}). The access token has been revoked ` +
+            `or deleted, is URL-restricted to an origin other than this one ` +
+            `(${window.location.origin}), or can't read the configured style. Check the ` +
+            `token in your Mapbox account.`,
         )
       } else if (err?.message) {
         setError(`Mapbox error: ${err.message}`)

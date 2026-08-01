@@ -5,6 +5,7 @@ import { polygonAreaWorld, worldAreaToSqft, formatArea } from '../../geometry/ar
 import { computeDepartmentAreas, type DeptAreas } from '../../geometry/departmentAreas'
 import { FIXED_COLOR_DEPT_TYPES } from '../../types/geometry'
 import { importUnderlay } from '../../io/importUnderlay'
+import { MAPBOX_DISABLED_MESSAGE, MAPBOX_ENABLED } from '../../config/mapbox'
 import './RightPanel.css'
 
 /**
@@ -207,10 +208,14 @@ function ContextControls({
           type="button"
           className={`context-option${context === 'MAP' ? ' is-active' : ''}`}
           onClick={() => { clearUnderlay(); setContext('MAP') }}
+          disabled={!MAPBOX_ENABLED}
+          title={MAPBOX_ENABLED ? undefined : MAPBOX_DISABLED_MESSAGE}
         >
           <MapIcon size={18} strokeWidth={1.75} />
           <span>Map</span>
-          <small>Trace a real site over Mapbox</small>
+          <small>
+            {MAPBOX_ENABLED ? 'Trace a real site over Mapbox' : 'Unavailable — no Mapbox token'}
+          </small>
         </button>
         <button
           type="button"
